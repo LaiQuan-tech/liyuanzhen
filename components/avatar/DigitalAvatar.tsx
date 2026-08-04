@@ -2,7 +2,10 @@
 
 import { AVATAR_NAME } from "@/content/site";
 
-export type AvatarState = "idle" | "thinking" | "speaking";
+import type { AvatarState } from "@/lib/avatar/types";
+
+// 型別的正本在 lib/avatar/types.ts；這裡轉出是為了讓既有的 import 路徑繼續可用
+export type { AvatarState };
 
 /**
  * 刻意「不」描繪李元貞老師的長相。

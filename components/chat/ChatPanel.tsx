@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import DigitalAvatar, { type AvatarState } from "@/components/avatar/DigitalAvatar";
+import DigitalAvatar from "@/components/avatar/DigitalAvatar";
+import { deriveAvatarState } from "@/lib/avatar/types";
 import { Speaker } from "@/lib/tts";
 import { ANSWER_DISCLAIMER } from "@/content/site";
 import { OPENING_QUESTIONS } from "@/content/suggested-questions";
@@ -15,9 +16,12 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [avatarState, setAvatarState] = useState<AvatarState>("idle");
+  const [speaking, setSpeaking] = useState(false);
   const [voiceOn, setVoiceOn] = useState(false);
   const [voiceAvailable, setVoiceAvailable] = useState(false);
+
+  // 不要把它改回 useState。理由寫在 deriveAvatarState 的註解裡。
+  const avatarState = deriveAvatarState(speaking, busy);
 
   const sessionIdRef = useRef<string>("");
   const speakerRef = useRef<Speaker | null>(null);
@@ -32,9 +36,8 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
 
     const speaker = new Speaker();
     speakerRef.current = speaker;
-    speaker.init((state) => {
-      setAvatarState((prev) => (prev === "thinking" ? prev : state === "speaking" ? "speaking" : "idle"));
-    }).then(setVoiceAvailable);
+    // Speaker 只回報它自己知道的事：有沒有在發聲。thinking 由 busy 推導，不歸它管。
+    speaker.init((state) => setSpeaking(state === "speaking")).then(setVoiceAvailable);
 
     // 預熱 lambda：冷啟動的 3~5 秒靜默是提案現場最尷尬的時刻
     fetch("/api/health").catch(() => {});
@@ -53,7 +56,6 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
 
       setInput("");
       setBusy(true);
-      setAvatarState("thinking");
 
       const speaker = speakerRef.current;
       speaker?.stop();
@@ -78,7 +80,6 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let answer = "";
-        let spoke = false;
 
         for (;;) {
           const { done, value } = await reader.read();
@@ -86,20 +87,17 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
           const delta = decoder.decode(value, { stream: true });
           answer += delta;
 
-          if (voiceOn && voiceAvailable) {
-            if (!spoke) spoke = true;
-            speaker?.push(delta);
-          }
+          if (voiceOn && voiceAvailable) speaker?.push(delta);
           setMessages([...history, { role: "model", text: answer }]);
         }
 
         if (voiceOn && voiceAvailable) speaker?.flush();
-        if (!spoke) setAvatarState("idle");
       } catch {
         setMessages([...history, { role: "model", text: "連線好像不太穩，請再試一次。" }]);
       } finally {
+        // 串流結束不代表講完了——朗讀還在跑時 speaking 仍為 true，
+        // 推導出來就會是 speaking 而不是 idle，不需要在這裡特判。
         setBusy(false);
-        if (!(voiceOn && voiceAvailable)) setAvatarState("idle");
       }
     },
     [busy, messages, voiceOn, voiceAvailable]
@@ -142,8 +140,8 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
             <button
               type="button"
               onClick={() => {
-                speakerRef.current?.stop();
-                setAvatarState("idle");
+                speakerRef.current?.stop(); // stop() 自己會發 onState("idle")
+                setSpeaking(false); // 沒有 speaker 實例時的保險，冪等
               }}
               className="lz-chip"
             >
