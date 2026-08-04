@@ -1,0 +1,246 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * 設計系統移植自提案簡報 liyuanzhen-pitch/index.html。
+ * 變數名稱刻意與 deck 保持一致，方便兩邊對照。
+ */
+:root {
+  --bg: #fffbec;
+  --bg-alt: #ffffff;
+  --bg-tint: #fff6d6;
+  --ink: #1a1a1a;
+  --ink-soft: #2e2a1c;
+  --gray: #6b6357;
+  --gray2: #9c9384;
+  --line: rgba(26, 26, 26, 0.11);
+  --yellow: #ffce00;
+  --yellow-soft: #ffe680;
+  --yellow-wash: #fff6d6;
+  --ok: #15803d;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-noto), -apple-system, BlinkMacSystemFont, "PingFang TC", sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: var(--yellow);
+    color: var(--ink);
+  }
+  /* 鍵盤焦點必須看得見——展場與提案現場都會有人用鍵盤操作 */
+  :focus-visible {
+    outline: 3px solid var(--ink);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* ── 版面 ───────────────────────────────── */
+  .lz-wrap {
+    @apply mx-auto w-full px-5;
+    max-width: 940px;
+  }
+  .lz-wrap-wide {
+    @apply mx-auto w-full px-5;
+    max-width: 1120px;
+  }
+  .lz-section {
+    @apply py-16 md:py-24;
+  }
+
+  /* ── 字級（對齊 deck 的 clamp 值）────────── */
+  .lz-h1 {
+    font-family: var(--font-baloo), var(--font-noto), sans-serif;
+    font-size: clamp(40px, 7.4vw, 88px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    line-height: 1.02;
+    text-wrap: balance;
+  }
+  .lz-h2 {
+    font-family: var(--font-baloo), var(--font-noto), sans-serif;
+    font-size: clamp(31px, 4.9vw, 60px);
+    font-weight: 800;
+    letter-spacing: -0.005em;
+    line-height: 1.08;
+    text-wrap: balance;
+  }
+  .lz-h3 {
+    font-family: var(--font-baloo), var(--font-noto), sans-serif;
+    font-size: clamp(20px, 2.6vw, 27px);
+    font-weight: 700;
+    line-height: 1.25;
+  }
+  .lz-lead {
+    font-size: clamp(17px, 2.3vw, 23px);
+    color: var(--gray);
+    line-height: 1.55;
+    max-width: 720px;
+  }
+
+  /* ── eyebrow：黃字墨底藥丸，deck 的招牌標籤 ── */
+  .lz-eyebrow {
+    @apply inline-block;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--yellow);
+    background: var(--ink);
+    letter-spacing: 0.02em;
+    padding: 6px 15px;
+    border-radius: 999px;
+  }
+
+  /* ── 按鈕：墨底白字，hover 會「浮起來」───── */
+  .lz-cta {
+    @apply inline-flex items-center justify-center gap-2;
+    font-family: var(--font-baloo), var(--font-noto), sans-serif;
+    background: var(--ink);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 700;
+    padding: 14px 28px;
+    border-radius: 980px;
+    box-shadow: 3px 4px 0 rgba(26, 26, 26, 0.18);
+    transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease);
+  }
+  .lz-cta:hover {
+    transform: translate(-1px, -2px);
+    box-shadow: 5px 7px 0 rgba(26, 26, 26, 0.22);
+  }
+  .lz-cta:active {
+    transform: translate(1px, 1px);
+    box-shadow: 2px 2px 0 rgba(26, 26, 26, 0.18);
+  }
+  .lz-cta-ghost {
+    @apply inline-flex items-center justify-center gap-2;
+    font-family: var(--font-baloo), var(--font-noto), sans-serif;
+    background: transparent;
+    color: var(--ink);
+    border: 2px solid var(--ink);
+    font-size: 16px;
+    font-weight: 700;
+    padding: 12px 26px;
+    border-radius: 980px;
+    box-shadow: 3px 4px 0 rgba(26, 26, 26, 0.14);
+    transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease), background 0.22s;
+  }
+  .lz-cta-ghost:hover {
+    background: rgba(26, 26, 26, 0.05);
+    transform: translate(-1px, -2px);
+    box-shadow: 5px 7px 0 rgba(26, 26, 26, 0.2);
+  }
+
+  /* ── 卡片：墨線 + 硬偏移陰影 ─────────────── */
+  .lz-card {
+    background: #fff;
+    border: 2px solid var(--ink);
+    border-radius: 16px;
+    box-shadow: 4px 5px 0 rgba(26, 26, 26, 0.12);
+  }
+  .lz-card-sm {
+    background: #fff;
+    border: 1.5px solid var(--ink);
+    border-radius: 12px;
+    box-shadow: 3px 4px 0 rgba(26, 26, 26, 0.1);
+  }
+  .lz-card-wash {
+    background: var(--yellow-wash);
+    border: 1.5px solid var(--ink);
+    border-radius: 14px;
+    box-shadow: 3px 4px 0 rgba(26, 26, 26, 0.1);
+  }
+
+  /* ── 小藥丸標籤 ─────────────────────────── */
+  .lz-pill {
+    @apply inline-flex items-center;
+    background: var(--yellow);
+    border: 1.5px solid var(--ink);
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 3px 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── 瀏覽器外框（首頁展示對話用）─────────── */
+  .lz-device {
+    background: #fff;
+    border: 2px solid var(--ink);
+    border-radius: 20px;
+    box-shadow: 8px 10px 0 rgba(26, 26, 26, 0.14);
+    overflow: hidden;
+  }
+
+  /* ── 對話氣泡 ───────────────────────────── */
+  .lz-bubble-me {
+    background: var(--ink);
+    color: #fff;
+    border-radius: 13px;
+    border-bottom-right-radius: 4px;
+    padding: 11px 15px;
+  }
+  .lz-bubble-her {
+    background: var(--yellow-wash);
+    color: var(--ink);
+    border: 1px solid #ece0c4;
+    border-radius: 13px;
+    border-bottom-left-radius: 4px;
+    padding: 11px 15px;
+  }
+
+  /* ── 建議問題 chip ──────────────────────── */
+  .lz-chip {
+    @apply inline-flex items-center text-left;
+    background: #fff;
+    border: 1.5px solid var(--ink);
+    border-radius: 999px;
+    font-size: 13.5px;
+    font-weight: 500;
+    padding: 7px 14px;
+    box-shadow: 2px 3px 0 rgba(26, 26, 26, 0.14);
+    transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease);
+  }
+  .lz-chip:hover {
+    transform: translate(-1px, -1px);
+    background: var(--yellow-wash);
+    box-shadow: 3px 4px 0 rgba(26, 26, 26, 0.18);
+  }
+
+  /* ── 捲動揭示 ───────────────────────────── */
+  .lz-reveal {
+    opacity: 0;
+    transform: translateY(26px);
+    transition: opacity 0.9s var(--ease), transform 0.9s var(--ease);
+  }
+  .lz-reveal.is-in {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .lz-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .lz-cta,
+  .lz-cta-ghost,
+  .lz-chip {
+    transition: none;
+  }
+}
