@@ -1,10 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import DigitalAvatar from "@/components/avatar/DigitalAvatar";
-import { deriveAvatarState } from "@/lib/avatar/types";
-import { Speaker } from "@/lib/tts";
-import { ANSWER_DISCLAIMER } from "@/content/site";
+import AvatarStage, { type AvatarStageHandle } from "@/components/avatar/AvatarStage";
+import { deriveAvatarState, speakableAnswer } from "@/lib/avatar";
+import { ANSWER_DISCLAIMER, GUARDED_REPLY } from "@/content/site";
 import { OPENING_QUESTIONS } from "@/content/suggested-questions";
 
 interface Message {
@@ -24,7 +23,7 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
   const avatarState = deriveAvatarState(speaking, busy);
 
   const sessionIdRef = useRef<string>("");
-  const speakerRef = useRef<Speaker | null>(null);
+  const stageRef = useRef<AvatarStageHandle>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentInitial = useRef(false);
 
@@ -34,15 +33,8 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
         ? crypto.randomUUID()
         : String(Date.now());
 
-    const speaker = new Speaker();
-    speakerRef.current = speaker;
-    // Speaker 只回報它自己知道的事：有沒有在發聲。thinking 由 busy 推導，不歸它管。
-    speaker.init((state) => setSpeaking(state === "speaking")).then(setVoiceAvailable);
-
     // 預熱 lambda：冷啟動的 3~5 秒靜默是提案現場最尷尬的時刻
     fetch("/api/health").catch(() => {});
-
-    return () => speaker.stop();
   }, []);
 
   useEffect(() => {
@@ -57,9 +49,7 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
       setInput("");
       setBusy(true);
 
-      const speaker = speakerRef.current;
-      speaker?.stop();
-      speaker?.reset();
+      stageRef.current?.stop(); // 上一題還在唸的話先閉嘴
 
       const history = [...messages, { role: "user" as const, text: question }];
       setMessages([...history, { role: "model", text: "" }]);
@@ -87,11 +77,15 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
           const delta = decoder.decode(value, { stream: true });
           answer += delta;
 
-          if (voiceOn && voiceAvailable) speaker?.push(delta);
+          // 逐句朗讀的 driver 會邊收邊唸；等整段才開口的 driver 會忽略它
+          if (voiceOn) stageRef.current?.push(delta);
           setMessages([...history, { role: "model", text: answer }]);
         }
 
-        if (voiceOn && voiceAvailable) speaker?.flush();
+        // ⚠️ 一定要送 speakableAnswer 而不是 answer：answer-guard 命中封鎖清單時
+        //    會回收已送出的文字、在後面追加婉拒句。照著整段唸就會把系統認定
+        //    不該說的那段用她的臉和聲音講出去。
+        if (voiceOn) stageRef.current?.finish(speakableAnswer(answer, GUARDED_REPLY));
       } catch {
         setMessages([...history, { role: "model", text: "連線好像不太穩，請再試一次。" }]);
       } finally {
@@ -100,7 +94,7 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
         setBusy(false);
       }
     },
-    [busy, messages, voiceOn, voiceAvailable]
+    [busy, messages, voiceOn]
   );
 
   // 深連結：/chat?q=… 自動送出，讓時間軸與金句卡可以直接把問題帶進來
@@ -117,7 +111,13 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
       {/* 頂部：頭像與語音開關 */}
       <div className="flex items-center justify-between gap-3 border-b-2 border-ink bg-paper-tint px-4 py-3">
         <div className="flex items-center gap-3">
-          <DigitalAvatar state={avatarState} size="sm" />
+          <AvatarStage
+            ref={stageRef}
+            state={avatarState}
+            size="sm"
+            onSpeakingChange={setSpeaking}
+            onAudioAvailableChange={setVoiceAvailable}
+          />
         </div>
         <div className="flex items-center gap-2">
           {voiceAvailable ? (
@@ -126,7 +126,14 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
               onClick={() => {
                 const next = !voiceOn;
                 setVoiceOn(next);
-                if (!next) speakerRef.current?.stop();
+                if (next) {
+                  // ⚠️ 這一下點擊就是我們需要的自動播放解鎖手勢，也是串流開始計費的
+                  //    那一刻。刻意不放在 useEffect 裡：StrictMode 會讓 effect 跑
+                  //    兩次，等於開兩個計費 session。
+                  void stageRef.current?.prepare();
+                } else {
+                  stageRef.current?.stop();
+                }
               }}
               className="lz-chip"
               aria-pressed={voiceOn}
@@ -140,8 +147,8 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
             <button
               type="button"
               onClick={() => {
-                speakerRef.current?.stop(); // stop() 自己會發 onState("idle")
-                setSpeaking(false); // 沒有 speaker 實例時的保險，冪等
+                stageRef.current?.stop(); // driver 會自己回報停止發聲
+                setSpeaking(false); // driver 還沒建好時的保險，冪等
               }}
               className="lz-chip"
             >

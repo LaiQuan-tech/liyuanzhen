@@ -15,3 +15,89 @@ export function deriveAvatarState(speaking: boolean, busy: boolean): AvatarState
   if (busy) return "thinking";
   return "idle";
 }
+
+/**
+ * monogram  現況：圓形「李」字標記 ＋ 瀏覽器 TTS。零成本、無肖像疑慮，
+ *           也是其他 driver 掛掉時的退路，所以永遠不會被移除。
+ * mock      假時序、不發聲、不連外。用來把整個 UI（載入、淡入、閒置退場、
+ *           失敗降級、浮水印）做完並測完，完全不需要任何帳號或額度。
+ * heygen    真的即時串流虛擬人。Phase 2 才實作。
+ */
+export type AvatarProvider = "monogram" | "mock" | "heygen";
+
+export interface AvatarDriverHooks {
+  /** driver 開始／停止發聲。呼叫端拿它餵 deriveAvatarState。 */
+  onSpeakingChange(speaking: boolean): void;
+  /**
+   * 不可恢復的錯誤。收到之後呼叫端應該立刻降級回 monogram，
+   * 而且不可以再呼叫這個 driver 的任何方法。
+   *
+   * 這是整個 driver 介面存在的主要理由：數位人死掉時，
+   * 網站要退化成「還能用的文字聊天」，而不是白畫面。
+   */
+  onFatal(error: Error): void;
+}
+
+/**
+ * 所有 driver 都自己擁有音訊輸出，呼叫端不可以另外再開一路瀏覽器 TTS——
+ * 否則會有兩個聲音疊在一起講同一段話。這件事靠介面本身保證：
+ * ChatPanel 拿不到 Speaker，只拿得到 driver。
+ *
+ * ⚠️ 任何一個方法都不可以把例外丟給呼叫端。錯誤一律走 hooks.onFatal。
+ */
+export interface AvatarDriver {
+  readonly provider: AvatarProvider;
+  /** 需不需要一個 <video> 才能運作。monogram 是 false。 */
+  readonly needsVideo: boolean;
+  /**
+   * 這個 driver 活著就在花錢／佔用遠端 session。
+   *
+   * 決定要不要掛閒置退場、切到背景就收、離開頁面就收、單次硬上限那一整套。
+   * 刻意跟 needsVideo 分開：兩者現在剛好一致，但意思不同，
+   * 而把 monogram 誤判成 metered 會讓它閒置 90 秒後啞掉——那是純粹的 bug。
+   */
+  readonly metered: boolean;
+  /**
+   * prepare() 之後才有意義：這個 driver 在「這台裝置上」到底發不發得出聲音。
+   * monogram 會因為裝置沒有中文語音而是 false，這時 UI 要顯示「此裝置無中文語音」。
+   */
+  readonly audioAvailable: boolean;
+
+  /**
+   * 必須在使用者手勢的呼叫堆疊裡呼叫（自動播放政策），而且 heygen 從這裡開始計費。
+   * 冪等：重複呼叫只會生效一次。
+   */
+  prepare(video: HTMLVideoElement | null): Promise<void>;
+
+  /**
+   * 串流中的增量文字。等整段答案才開口的 driver（heygen）會直接忽略它——
+   * 理由寫在 speakableAnswer 的註解裡。
+   */
+  push(delta: string): void;
+
+  /** 串流結束，傳入**完整**答案。逐句朗讀的 driver 此時只需把殘句唸完。 */
+  finish(fullText: string): void;
+
+  /** 立刻閉嘴，但保留 session。冪等。 */
+  stop(): void;
+
+  /** 釋放資源（heygen：關掉計費中的 session）。冪等，呼叫後不可再用。 */
+  destroy(): Promise<void>;
+}
+
+/**
+ * 決定「真正要唸出來的是哪段字」。
+ *
+ * lib/answer-guard.ts 會**回收已經送出的文字**：命中封鎖清單時它停止輸出，
+ * 然後路由在後面追加 GUARDED_REPLY。畫面上使用者看到的是被截斷的半句＋婉拒，
+ * 但如果我們照著整段唸，就會把「系統事後判定為不該說」的那段唸出去。
+ *
+ * 今天那是合成音，還只是尷尬；換成老師本人的臉和聲音之後，
+ * 那就是**她的臉、她的聲音，說出一句系統認定她不該說的話**。
+ *
+ * 所以規則很簡單：結尾是 GUARDED_REPLY 就只講 GUARDED_REPLY。
+ */
+export function speakableAnswer(fullText: string, guardedReply: string): string {
+  if (!guardedReply) return fullText;
+  return fullText.trimEnd().endsWith(guardedReply) ? guardedReply : fullText;
+}

@@ -1,0 +1,91 @@
+"use client";
+
+import type { RefObject } from "react";
+import { AVATAR_NAME } from "@/content/site";
+import type { AvatarState } from "@/lib/avatar/types";
+
+interface Props {
+  state: AvatarState;
+  size: "sm" | "lg";
+  visible: boolean;
+  /**
+   * ⚠️ 刻意用一般 prop 傳 ref，**不要**改回 forwardRef ＋ `ref={...}`。
+   *
+   * 這個元件是被 next/dynamic 包起來載入的，而 dynamic() 回傳的 LoadableComponent
+   * 不是 forwardRef 元件——`ref` 會被整個丟掉，videoRef.current 永遠是 null。
+   * 症狀非常隱蔽：畫面照樣渲染、交叉淡入照常，但解除靜音沒生效、
+   * session.attach(video) 拿到 null，所以第一次發現會是在**已經開始計費**的
+   * 串流 session 上，看著一個黑框。（這個 bug 真的發生過，被 mock driver 抓到。）
+   */
+  videoRef: RefObject<HTMLVideoElement>;
+}
+
+/**
+ * 串流虛擬人的畫面。純呈現，不碰 driver、不碰 SDK——
+ * 所以它可以被 next/dynamic 用 ssr:false 包起來而不牽動任何別的東西。
+ *
+ * ⚠️ 浮水印是常駐的，不做成可關閉。
+ * 逐則回答下方的免責句只活在網頁上，但**會說話的人臉被螢幕錄影轉傳的機率
+ * 遠高於文字泡泡**，而螢幕錄影不會把免責句一起帶走。所以標記必須燒在畫面裡。
+ */
+export default function VideoAvatar({ state, size, visible, videoRef }: Props) {
+  const dim = size === "lg" ? 128 : 56;
+
+  return (
+    <div
+      className="flex flex-col items-center gap-3 transition-opacity duration-500"
+      style={{ opacity: visible ? 1 : 0 }}
+      aria-hidden={!visible}
+    >
+      <div className="relative" style={{ width: dim, height: dim }}>
+        {state === "speaking" && (
+          <span
+            className="absolute inset-0 rounded-full border-2 border-ink/30 animate-ping"
+            style={{ animationDuration: "1.4s" }}
+            aria-hidden
+          />
+        )}
+
+        <div
+          className="relative h-full w-full overflow-hidden rounded-full border-[3px] border-ink bg-ink"
+          style={{ boxShadow: "4px 5px 0 rgba(26,26,26,.18)" }}
+        >
+          <video
+            ref={videoRef}
+            // muted 先掛著：自動播放政策要求靜音才能 play()，
+            // 解除靜音必須發生在使用者手勢當下（見 AvatarStage.prepare）
+            muted
+            playsInline // 不加的話 iOS 會強制全螢幕播放，版面直接崩掉
+            autoPlay
+            className="h-full w-full object-cover"
+          />
+
+          {/* 常駐標記。size=sm 時圓形太小塞不下整句，改用一個明顯的角標。 */}
+          {size === "lg" ? (
+            <span className="absolute bottom-0 left-0 right-0 bg-ink/75 py-1 text-center text-[10px] font-bold tracking-wide text-white">
+              AI 生成影像
+            </span>
+          ) : (
+            <span
+              className="absolute bottom-0 right-0 rounded-tl-md bg-ink/85 px-1 py-[1px] text-[8px] font-bold leading-tight text-white"
+              title="AI 生成影像"
+            >
+              AI
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="text-center">
+        <div className="font-display text-[15px] font-bold">{AVATAR_NAME}</div>
+        <div className="mt-0.5 text-[12px] text-muted">
+          {state === "thinking"
+            ? "正在查資料…"
+            : state === "speaking"
+              ? "回答中"
+              : "線上・可語音朗讀"}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,244 @@
+"use client";
+
+import dynamic from "next/dynamic";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
+import DigitalAvatar from "@/components/avatar/DigitalAvatar";
+import { createAvatarDriver, resolveProvider } from "@/lib/avatar";
+import type { AvatarDriver, AvatarState } from "@/lib/avatar";
+import { createIdleTimer } from "@/lib/idle-timer";
+
+/**
+ * VideoAvatar 只在瀏覽器端載入。Phase 2 之後這條路會把 livekit / webrtc-adapter
+ * 一起帶進來，那是經典的 SSR 地雷（`window is not defined`）。
+ * 在還沒裝 SDK 的現在就先把邊界劃好，比裝完再來救便宜得多。
+ */
+const VideoAvatar = dynamic(
+  () => import("@/components/avatar/VideoAvatar").then((m) => m.default),
+  { ssr: false }
+);
+
+/** 多久沒互動就收掉串流。太短會在使用者讀答案時斷掉，太長就是在燒錢。 */
+const IDLE_MS = 75_000;
+/** 單次 session 硬上限。防的是「開著分頁去吃飯」這種沒有惡意的燒錢方式。 */
+const HARD_CAP_MS = 5 * 60_000;
+
+export interface AvatarStageHandle {
+  /** ⚠️ 必須在使用者手勢的呼叫堆疊裡呼叫。冪等。 */
+  prepare(): Promise<void>;
+  push(delta: string): void;
+  finish(fullText: string): void;
+  stop(): void;
+}
+
+interface Props {
+  state: AvatarState;
+  size?: "sm" | "lg";
+  onSpeakingChange(speaking: boolean): void;
+  /** 這個 driver 在這台裝置上發不發得出聲音——決定要不要顯示朗讀按鈕 */
+  onAudioAvailableChange?(available: boolean): void;
+}
+
+const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
+  { state, size = "sm", onSpeakingChange, onAudioAvailableChange },
+  ref
+) {
+  const [videoReady, setVideoReady] = useState(false);
+  const driverRef = useRef<AvatarDriver | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const preparingRef = useRef<Promise<void> | null>(null);
+  const idleRef = useRef<ReturnType<typeof createIdleTimer> | null>(null);
+  const capRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // callback props 放進 ref：避免它們每次 render 變新函式就把整個 driver 重建一次
+  const speakingCb = useRef(onSpeakingChange);
+  speakingCb.current = onSpeakingChange;
+  const availableCb = useRef(onAudioAvailableChange);
+  availableCb.current = onAudioAvailableChange;
+
+  const [provider, setProvider] = useState(resolveProvider);
+  const needsVideo = provider !== "monogram";
+
+  /** 收掉會計費的 session，但保留 driver 物件（下次手勢可以重新 prepare） */
+  const teardown = useCallback(async () => {
+    idleRef.current?.stop();
+    if (capRef.current) {
+      clearTimeout(capRef.current);
+      capRef.current = null;
+    }
+    preparingRef.current = null;
+    setVideoReady(false);
+
+    const driver = driverRef.current;
+    if (!driver?.metered) return;
+    driverRef.current = null;
+    await driver.destroy();
+    speakingCb.current(false);
+  }, []);
+
+  // driver 生命週期。⚠️ 不在這裡 prepare()——那必須由使用者手勢觸發，
+  // 而 reactStrictMode 會讓 effect 跑兩次，等於開兩個計費 session。
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      const driver = await createAvatarDriver({
+        onSpeakingChange: (s) => {
+          if (!cancelled) speakingCb.current(s);
+        },
+        onFatal: (error) => {
+          if (cancelled) return;
+          console.error("[avatar] driver 失效，降級為 monogram：", error);
+          // 降級：使用者失去的是那張臉，不是整個聊天
+          void driverRef.current?.destroy();
+          driverRef.current = null;
+          preparingRef.current = null;
+          setVideoReady(false);
+          setProvider("monogram");
+        },
+      });
+
+      if (cancelled) {
+        void driver.destroy();
+        return;
+      }
+      driverRef.current = driver;
+      setProvider(driver.provider);
+
+      if (driver.metered) {
+        // 串流虛擬人自己帶聲音，跟這台裝置有沒有裝中文語音無關——
+        // 所以不用等 prepare（那要手勢）就能確定朗讀按鈕該顯示
+        availableCb.current?.(true);
+      } else {
+        // monogram 不計費也不需要手勢，直接備好；
+        // 它的可用性**取決於裝置**（沒有中文語音就是 false），必須問過才知道
+        await driver.prepare(null);
+        if (!cancelled) availableCb.current?.(driver.audioAvailable);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      const driver = driverRef.current;
+      driverRef.current = null;
+      void driver?.destroy();
+    };
+  }, []);
+
+  // 分頁被切到背景還在燒串流，是網站跟展場 kiosk 最大的成本差異。
+  // pagehide 而不是 unload——bfcache 之下 unload 不保證會跑。
+  useEffect(() => {
+    if (!needsVideo) return;
+
+    const onHidden = () => {
+      if (document.visibilityState === "hidden") void teardown();
+    };
+    const onPageHide = () => void teardown();
+
+    document.addEventListener("visibilitychange", onHidden);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHidden);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, [needsVideo, teardown]);
+
+  const prepare = useCallback(async () => {
+    const driver = driverRef.current;
+    if (!driver) return;
+    // 兩道 guard：已經備好了、以及正在備。少了第二道就有 double-spend race。
+    if (preparingRef.current) return preparingRef.current;
+    if (driver.metered && videoReady) return;
+
+    const run = (async () => {
+      // 解除靜音必須在手勢的**同步**段落做完，await 之後就不算手勢了
+      const video = videoRef.current;
+
+      if (driver.needsVideo && !video) {
+        // 絕對不能靜默放行：計費的 session 會照樣開起來，然後對著一個
+        // 不存在的 <video> 串流，畫面全黑。這種錯誤要在開發時就吵。
+        console.error(
+          "[avatar] driver 需要 <video> 但 videoRef 是空的——" +
+            "多半是 ref 沒穿過 next/dynamic 的包裝。中止 prepare，不開 session。"
+        );
+        return;
+      }
+
+      if (video) {
+        video.muted = false;
+        video.play().catch(() => {
+          // 靜默失敗看起來就跟壞掉一樣，所以要留痕跡
+          console.warn("[avatar] 自動播放被擋，需要使用者再點一次");
+        });
+      }
+
+      await driver.prepare(video ?? null);
+      availableCb.current?.(driver.audioAvailable);
+
+      if (driver.metered) {
+        setVideoReady(true);
+        idleRef.current = createIdleTimer(IDLE_MS, () => void teardown());
+        idleRef.current.start();
+        capRef.current = setTimeout(() => void teardown(), HARD_CAP_MS);
+      }
+    })();
+
+    preparingRef.current = run;
+    try {
+      await run;
+    } finally {
+      if (preparingRef.current === run) preparingRef.current = null;
+    }
+  }, [teardown, videoReady]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      prepare,
+      push: (delta) => {
+        idleRef.current?.reportActivity();
+        driverRef.current?.push(delta);
+      },
+      finish: (fullText) => {
+        idleRef.current?.reportActivity();
+        driverRef.current?.finish(fullText);
+      },
+      stop: () => driverRef.current?.stop(),
+    }),
+    [prepare]
+  );
+
+  return (
+    // 兩層疊在同一個 grid cell 上做交叉淡入：串流就緒前先看到「李」字標記，
+    // 客戶不會看到一個黑框。串流掛掉時也是原地淡回去，不會跳版。
+    <div className="grid">
+      <div
+        className="transition-opacity duration-500"
+        style={{ gridArea: "1 / 1", opacity: videoReady ? 0 : 1 }}
+        aria-hidden={videoReady}
+      >
+        <DigitalAvatar state={state} size={size} />
+      </div>
+
+      {needsVideo && (
+        <div style={{ gridArea: "1 / 1" }}>
+          {/* videoRef 是一般 prop，不是 ref——理由寫在 VideoAvatar 的 props 註解裡 */}
+          <VideoAvatar
+            videoRef={videoRef}
+            state={state}
+            size={size}
+            visible={videoReady}
+          />
+        </div>
+      )}
+    </div>
+  );
+});
+
+export default AvatarStage;
