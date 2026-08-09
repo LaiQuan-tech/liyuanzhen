@@ -387,13 +387,20 @@ condition；且 ALS 語音銀行社群是目前唯一大量處理衰退語音的
 2. **每分鐘半價**（LITE 1 credit vs FULL 2 credits）。展場階段 14,400 分鐘/月的話，
    差距是 US$1,400 對 US$2,800。
 
-**兩個曾經被我列為理由、但後來收回的論點**（留著避免重蹈）：
+**三個曾經被我列為理由、但後來收回的論點**（留著避免重蹈）：
 
-- ~~「FULL 走 HeyGen 原生管線，對嘴比較準」~~ ——**錯的**。綁 ElevenLabs 之後
-  HeyGen 拿到的一樣是外部音訊，只是改成它自己去抓。對它的對嘴模型而言兩邊都是
-  「不是我自己 TTS 產的音訊」，沒有原生優勢。
+- ~~「FULL 走 HeyGen 原生管線，對嘴比較準」~~ ——**錯的，而且錯得比想像中徹底**。
+  查證發現 **LiveAvatar 的原生 TTS 本來就是 ElevenLabs Flash v2.5**。所以綁自己的
+  ElevenLabs voice 等於在同一家換一個 voice id，走完全同一條伺服器端合成 → 對嘴
+  pipeline。原生優勢不存在。
+  （順帶：柯如竣那份「外掛音訊讓對嘴變差」的實測**不適用**——他跑的是 HeyGen
+  影片生成 API 的 `voice.type: "audio"` 上傳成品 mp3 路徑，跟 LiveAvatar 的伺服器端
+  即時合成不是同一條。這個疑慮可以撤掉了。）
 - ~~「ElevenLabs 的 captcha 對 80 歲長者是額外負擔」~~ ——**講得太重**。她本來就要
   為了 HeyGen 的同意影片坐到電腦前做即時流程，多一個 captcha 只是多十分鐘。
+- ~~「FULL mode 可以關掉瀏覽器端的注入管道，這對真實在世的公眾人物是實質優勢」~~
+  ——**錯的**。官方沒有任何伺服器端「叫她講話」的 HTTP 端點，兩種模式都只能從
+  瀏覽器驅動。詳見附錄 D-8。
 
 **為什麼是 LITE（在選 Azure 的前提下沒有別的選擇）**
 
@@ -524,21 +531,65 @@ api.liveavatar.com        TCP 443
 （建議）所有 host          UDP 50000–60000, TCP 7881
 ```
 
-### D-8　⚠️ 瀏覽器持有 `ws_url` 帶來的新風險
+### D-8　⚠️ 注入風險：兩種模式都關不掉，這是架構層級的問題
 
-把 WebSocket 交給瀏覽器換來了 serverless 架構，但代價是：**拿到 `ws_url` 的人，
-可以在該 session 存續期間讓她的臉對嘴任意音訊**——包括他自己錄的、或別處來的
-任何一段話。
+**先講結論：這件事跟選 LITE 還是 FULL 無關，兩邊都有，只是形態不同。**
 
-對一般的 AI 客服，這只是個惡作劇。對「台灣婦運先驅、80 歲、真實在世的公眾人物」，
-這是「有人做了一段她說出冒犯言論的影片並發出去」的風險。
+我原本假設 FULL mode 可能把注入管道關掉（伺服器端 HTTP 驅動、瀏覽器只拿唯讀
+token）。**查證結果是錯的。**
 
-已有的緩解：
-- 影片上的**常駐浮水印**（已實作）——任何螢幕錄影都會把「AI 生成影像」一起帶走
-- `max_session_duration` 設短（建議 300 秒）
-- 開 session 那支 route 要限流，一位訪客一個 session
+官方 `openapi.json` 全部 28 個端點裡，**沒有任何「叫 avatar 講話」的伺服器端 HTTP
+端點**——沒有 `/v1/sessions/{id}/task`，也沒有舊版 Streaming API 那種對應物。
+FULL mode 唯一的驅動管道是瀏覽器持有的 LiveKit client token，往 topic `agent-control`
+發 `avatar.speak_text`。
 
-沒有解決的：session 存續期間，內容本身無法管控。
+而且官方 SDK 的 `sendCommandEvent()` 是**雙通道 fallback**（讀 0.0.18 的發行檔確認）：
+有 `ws_url` 就走 WebSocket，沒有就走 `room.localParticipant.publishData()`。
+所以就算 FULL mode 不回傳 `ws_url`，`repeat()` 照樣從瀏覽器生效。
 
-要完全消除只有一條路：**WebSocket 改由伺服器持有**，但那需要一個能維持長連線的
-執行環境，等於放棄 serverless。這是一個要明確決定的取捨，不要當成預設值滑過去。
+| | LITE | FULL |
+|---|---|---|
+| 誰能讓她講話 | 持有 `ws_url` 的任何人 | 持有 `livekit_client_token` 的任何人 |
+| 注入內容 | **任意音訊**（可對嘴任何錄音、任何人的聲紋） | **任意文字**（用她的克隆聲唸出來） |
+| 伺服器端 HTTP 驅動 | 無 | **無** |
+| 官方有無關閉開關 | 無 | **無** |
+
+**FULL 不是比較安全，某種意義上更糟**——「她用自己的聲音講出那句話」比「她的臉對嘴
+別人的錄音」更像是她真的說了。
+
+而且憑證一旦進瀏覽器就沒有純前端解法。不用官方 SDK 也沒用，權限在 token 裡：
+client token 必然帶 `canPublishData`（FULL 的 push-to-talk 與 command 都靠它），
+訪客開 DevTools 就能自己 `publishData`。
+
+### 唯一真正的解法，以及它的代價
+
+**自控 LiveKit room**：走 LiveKit Agents 的 plugin，讓 LiveAvatar 加入**我們自己的**
+room（`avatar.start(session, room=ctx.room)`），前端 participant token 由我們簽發，
+設 `canPublish: false` / `canPublishData: false`，做出真正的唯讀訂閱端。
+
+代價是這條路強制回到常駐 worker——放棄 serverless、多一台主機一筆月費，
+等於把 D-1 那個「不用多開主機」的好消息還回去。
+
+⚠️ **而且這條路目前只有二手線索**（前端 token 由誰簽，LiveKit 文件沒明講），
+**下賭注前必須實測驗證**。
+
+### 一個重要的不對稱：展場沒有這個問題
+
+展場互動站是**受控裝置**——沒有 DevTools、有現場人員、實體監督。
+所以第二階段的 kiosk 完全不受影響。
+
+**暴露的只有公開網站。** 這代表兩個階段可以用不同的安全等級，不必為了網站的
+風險去犧牲展場的體驗，也不必為了展場去付網站用不到的主機費。
+
+### 現階段的建議
+
+網站現在是 noindex 的提案展示版，訪客只有客戶與我們。我建議：
+
+1. 接受風險，用現有緩解：常駐浮水印（任何螢幕錄影都會把「AI 生成影像」帶走）、
+   `max_session_duration` 300 秒、開 session 的 route 限流、一位訪客一個 session
+2. **加開逐字稿留存**：`GET /v1/sessions/{id}/transcript` 這支端點存在，
+   全程留存可做事後稽核——真的出事時，我們能證明系統實際輸出過什麼
+3. **正式對外或發新聞稿之前，這一題要重新決定**，並先把自控 LiveKit room 那條實測掉
+
+第 3 點是這份文件裡少數「現在不做、但絕對不能忘」的事項。基金會的董事會若問到
+「有沒有人能讓她說出奇怪的話」，現在的誠實答案是「有，但會留下 AI 浮水印與逐字稿」。
