@@ -53,15 +53,22 @@ Region 要選**有支援 Personal Voice 的**（申請通過後 Microsoft 會給
 
 ## 階段 1：架構驗證（零成本，不用等老師）
 
-### 1-1　釘死 LITE mode 的接法　🤖 我
+### 1-1　釘死 LITE mode 的接法　✅ 已完成
 
-待確認的核心問題：LITE mode 送音訊是否**必須**透過常駐的 LiveKit／Pipecat agent。
+**結論：不用另外開常駐主機，可以留在 Vercel。**
 
-- 如果**要**：Vercel 的 serverless 跑不了常駐 process，得另外開一台 always-on
-  主機（Railway 之類）。這會多一筆月費，也多一個要維運的東西。
-- 如果**不要**：現有的 Vercel 架構直接沿用，只要加兩支 API 路由。
+LITE mode 的音訊入口不是 LiveKit agent，是 `POST /v1/sessions/start` 回傳的
+`ws_url` —— 直接對它送 JSON 就會講話。官方 Integration Paths 明列這條路叫
+「**No agent — drive audio directly**」。
 
-> 完成判準：拿到官方文件出處，能明確回答「要不要多開一台主機」。
+LiveKit／Pipecat 那兩個 plugin 確實是常駐 worker（Vercel 跑不了），但它們解的是
+「語音進、語音出」的 voice agent；我們的互動發生在文字層（訪客打字 → RAG），
+房間裡沒有麥克風音訊要做 STT，所以 worker 唯一能提供的價值我們根本用不到。
+
+**分工：** Vercel 只負責三支短命的 HTTP route（鑄 token、開 session、Azure TTS
+proxy）；整段 session 的 WebSocket 由**瀏覽器**持有，不受 function timeout 影響。
+
+完整的協定規格見本檔末尾「附錄 D：LITE mode 整合規格」。
 
 ### 1-2　Sandbox 打通　🤖 我（需要你先給 API key）
 
@@ -356,3 +363,137 @@ Microsoft 審這張表看的是「你有沒有想過濫用風險」。這個專�
 1. 60 歲以上客製 avatar 的品質——公開資料完全空白，只能自己測（階段 1-3、5）
 2. 外掛音訊可能讓對嘴變差（柯如竣的一手實測，但測的是影片生成線不是即時線）
 3. 聲音克隆普遍會把高齡特徵「美化」掉（階段 5 的盲測第 2 項就是在測這個）
+4. **瀏覽器持有 `ws_url` = 訪客可以讓她的臉對嘴任意音訊**（見附錄 D 末節）
+
+---
+
+## 附錄 D：LITE mode 整合規格
+
+以下全部來自官方文件一手查證。標「實測值」的來自 Pipecat 官方整合的原始碼。
+
+### D-1　兩條獨立通道
+
+| 通道 | 走哪裡 | 誰持有 |
+|---|---|---|
+| 看得到（video in） | LiveKit，用 `livekit_url` + `livekit_client_token` 訂閱 avatar 的 track | 瀏覽器 |
+| 講得出（audio out） | `ws_url` 上送 base64 PCM | 瀏覽器 |
+| 鑄 token／開 session／Azure TTS | HTTP，短命請求 | Vercel route |
+
+`X-API-KEY` 只在 Vercel server route 出現，永不外流。
+
+### D-2　開 session（兩步，同一支 route 內做完）
+
+```
+POST https://api.liveavatar.com/v1/sessions/token
+Headers: X-API-KEY: <key>
+
+{
+  "mode": "LITE",
+  "avatar_id": "dd73ea75-1218-4ef3-92ce-606d5f7fbc0a",   // sandbox 的 Wayne
+  "is_sandbox": true,                                     // 上線時整個拿掉
+  "video_settings": { "quality": "high", "encoding": "H264" },
+  "max_session_duration": 300
+}
+→ { "data": { "session_id", "session_token" } }
+
+POST https://api.liveavatar.com/v1/sessions/start
+Headers: Authorization: Bearer <session_token>
+（無 body）
+→ { "data": { "session_id", "livekit_url", "livekit_client_token",
+              "livekit_agent_token", "ws_url", "max_session_duration" } }
+```
+
+回傳給前端：`session_id` + `livekit_url` + `livekit_client_token` + `ws_url`。
+**不要**回傳 `livekit_agent_token`，那是給 agent 用的，我們不用。
+
+⚠️ **`avatar_persona` 和 `voice_agent` 在 LITE mode 都不存在。** Sunny 那支路由裡整塊
+`avatar_persona: {voice_id, language}` 要**整段刪掉**——聲音是我們自己給的，
+LiveAvatar 不需要知道用哪個 voice。（`voice_agent` 是 FULL mode 用來取代已 deprecated
+的 `avatar_persona` 的，跟我們無關。）
+
+⚠️ `encoding: "VP8"` 已 deprecated，用 `H264`（預設值）。
+⚠️ 官方 Configuration 頁的 `livekit_config` 範例欄位名是錯的，以 API reference 為準。
+
+### D-3　WebSocket 事件
+
+**必須等收到 `{"type":"session.state_updated","state":"connected"}` 才能開始送**，
+這是文件的明文警告。
+
+| 事件 | payload |
+|---|---|
+| 送音訊 | `{"type":"agent.speak","event_id":"<uuid>","audio":"<base64>"}` |
+| 一段講完 | `{"type":"agent.speak_end","event_id":"<同一個 uuid>"}` |
+| 打斷 | `{"type":"agent.interrupt"}` |
+| 保活 | `{"type":"session.keep_alive","event_id":"<uuid>"}` |
+| 聆聽態 | `agent.start_listening` / `agent.stop_listening` |
+
+⚠️ **`agent.speak` 的語意是排隊不是打斷。** 文件原文是「**Adds** audio to the avatar's
+**playback buffer**」。訪客中途送新問題時，一定要先送 `agent.interrupt` 清空 buffer，
+否則新答案會排在舊答案後面播。
+
+⚠️ **LITE mode 沒有 `repeat()`、沒有 `say()`、沒有任何送文字的方法。** 只能送音訊。
+（那些是 FULL mode 的事件。）
+
+### D-4　音訊格式：Azure 與 LiveAvatar 逐位元對得上
+
+| 項目 | 要求 |
+|---|---|
+| 編碼 | PCM 16-bit linear（**無 WAV/RIFF header**） |
+| 取樣率 | 24,000 Hz |
+| 聲道 | mono |
+| 包裝 | base64 放進 JSON 的 `audio` 欄位 |
+| chunk | 建議約 1 秒，單包上限 1MB |
+
+Azure 端設 `X-Microsoft-OutputFormat: raw-24khz-16bit-mono-pcm`。
+
+⚠️ **一定要 `raw-` 不能是 `riff-`。** `riff-` 會帶 44 bytes 的 WAV header，直接送過去
+會在每一段開頭產生爆音；而且 `riff-*` 全在 Azure 的 NonStreaming 清單裡，串流拿不到。
+
+Azure 神經語音原生就是 24kHz，選 24kHz 不會觸發任何 resample 損耗。
+**中間不需要轉檔、不需要重新取樣。**
+
+切塊策略（Pipecat 實測值）：首包 19,200 bytes（400ms）求首字快，之後每
+48,000 bytes（1000ms）。
+
+### D-5　生命週期
+
+- **idle timeout 5 分鐘**，keepAlive 每 **150 秒**送一次（抓一半，Pipecat 實測值）
+- `max_session_duration` 的上限由方案決定，實際生效值看 `/sessions/start` 的回應
+- 結束：`POST /v1/sessions/stop`（Bearer session_token），並自行關 WS、離開 LiveKit room
+
+### D-6　Sandbox
+
+`is_sandbox: true`，不用另外申請、不扣 credits、免費帳號就能用。
+只有一個 avatar：`dd73ea75-1218-4ef3-92ce-606d5f7fbc0a`（Wayne），session 約 1 分鐘。
+
+那 1 分鐘足夠驗證完整鏈路：token → start → WS 連上 → 收到 `connected` →
+送 base64 PCM → 收到 `agent.speak_started` → 畫面上嘴型動。
+
+### D-7　防火牆／CSP 白名單（展場現場會用到）
+
+```
+api.liveavatar.com        TCP 443
+*.livekit.cloud           TCP 443
+*.turn.livekit.cloud      TCP 443
+*.host.livekit.cloud      UDP 3478
+（建議）所有 host          UDP 50000–60000, TCP 7881
+```
+
+### D-8　⚠️ 瀏覽器持有 `ws_url` 帶來的新風險
+
+把 WebSocket 交給瀏覽器換來了 serverless 架構，但代價是：**拿到 `ws_url` 的人，
+可以在該 session 存續期間讓她的臉對嘴任意音訊**——包括他自己錄的、或別處來的
+任何一段話。
+
+對一般的 AI 客服，這只是個惡作劇。對「台灣婦運先驅、80 歲、真實在世的公眾人物」，
+這是「有人做了一段她說出冒犯言論的影片並發出去」的風險。
+
+已有的緩解：
+- 影片上的**常駐浮水印**（已實作）——任何螢幕錄影都會把「AI 生成影像」一起帶走
+- `max_session_duration` 設短（建議 300 秒）
+- 開 session 那支 route 要限流，一位訪客一個 session
+
+沒有解決的：session 存續期間，內容本身無法管控。
+
+要完全消除只有一條路：**WebSocket 改由伺服器持有**，但那需要一個能維持長連線的
+執行環境，等於放棄 serverless。這是一個要明確決定的取捨，不要當成預設值滑過去。
