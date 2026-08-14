@@ -561,17 +561,68 @@ FULL mode 唯一的驅動管道是瀏覽器持有的 LiveKit client token，往 
 client token 必然帶 `canPublishData`（FULL 的 push-to-talk 與 command 都靠它），
 訪客開 DevTools 就能自己 `publishData`。
 
-### 唯一真正的解法，以及它的代價
+### ⚠️ 修正：上面那段講的是 FULL mode，LITE mode 很可能沒有這個洞
 
-**自控 LiveKit room**：走 LiveKit Agents 的 plugin，讓 LiveAvatar 加入**我們自己的**
-room（`avatar.start(session, room=ctx.room)`），前端 participant token 由我們簽發，
-設 `canPublish: false` / `canPublishData: false`，做出真正的唯讀訂閱端。
+後續查證發現一件事，讓「自控 LiveKit room」這個解法可能整個不需要。
 
-代價是這條路強制回到常駐 worker——放棄 serverless、多一台主機一筆月費，
-等於把 D-1 那個「不用多開主機」的好消息還回去。
+官方兩處原文：
 
-⚠️ **而且這條路目前只有二手線索**（前端 token 由誰簽，LiveKit 文件沒明講），
-**下賭注前必須實測驗證**。
+> the agent runs STT → LLM → TTS and **forwards synthesized audio over the
+> LiveAvatar WebSocket (`ws_url`)**
+> — docs/guides/livekit/custom-livekit-agent
+
+> **Instead of your agent publishing audio into the room**, the plugin forwards it
+> to LiveAvatar, which syncs it to the avatar's video output.
+> — docs/lite-mode/plugins/livekit
+
+也就是說：**LITE mode 的 avatar renderer 不消費 LiveKit room 的 data channel。**
+訪客就算 publish 一堆 data message 或音軌進 room，也沒有任何元件在聽——
+avatar 只同步從 `ws_url` 送進去的 PCM。
+
+而 `ws_url` 只出現在 `POST /v1/sessions/start` 的回應裡，也就是**只有我們的後端拿得到**。
+
+所以真正的規則比「自控 room」簡單得多：
+
+> **不要把 `ws_url` 交給瀏覽器。** 只要它留在伺服器端，注入管道就不存在，
+> 用誰的 LiveKit room 都無所謂。
+
+（本檔更早的版本曾建議「把 WebSocket 交給瀏覽器以維持 serverless」——**那個建議
+要作廢**。省下來的那台主機，代價是把注入管道親手打開。）
+
+### 動工前的 30 分鐘驗證（報酬率最高的一步）
+
+不要靠推論拍板。用 LITE mode 打一次 HeyGen 託管的 `POST /v1/sessions/start`，
+把回傳的 `livekit_client_token` 當標準 JWT **base64 解 payload**，讀 `video` grant 裡的
+`canPublish` / `canSubscribe` / `canPublishData`。
+
+- 若 client token 本來就沒有有效的注入權限 → 直接用 HeyGen 託管的 room，
+  LiveKit 那條線歸零，架構少一個元件、少一筆帳單
+- 若有 → 才需要自控 room
+
+**沙盒模式就能做這件事，不扣 credits。**
+
+### 實作修正：`livekit_config` 的欄位名
+
+本檔更早記的 `livekit_url` / `livekit_room` / `livekit_client_token` 是 **Pipecat wrapper
+的欄位名，不是官方 API 的**。官方 schema 只有兩個欄位，而且要的是 **agent token
+不是 client token**，room 名稱編在 token 的 `video.room` grant 裡：
+
+```json
+{
+  "mode": "LITE",
+  "avatar_id": "<avatar_id>",
+  "livekit_config": { "url": "wss://…", "token": "<your_agent_token>" }
+}
+```
+
+### 真正的防線在內容層，不在 token 層
+
+就算把 data channel 完全關掉，**一個會 prompt injection 的訪客照樣能讓她說出
+不該說的話**——因為那條路走的是我們自己的 RAG。
+
+這個題材（婦運先驅的數位分身、台灣、開放給不特定大眾）真正的風險是
+**她被誘導說出違背本人立場的政治或歷史發言**，而那是檢索門檻與 answer-guard
+在擋的，不是 token 權限。這兩層已經實作並測過了，它們才是主防線。
 
 ### 一個重要的不對稱：展場沒有這個問題
 
