@@ -1,16 +1,26 @@
 # 數位李元貞・真人虛擬人上線 Runbook
 
-臉已定：**HeyGen LiveAvatar**，客製 avatar 用老師本人的影片建模。
+臉已定：**LiveAvatar**（原 HeyGen Interactive Avatar，2026 已拆成獨立產品，
+註冊在 `app.liveavatar.com`、API base 是 `api.liveavatar.com`）。
+客製 avatar 用老師本人的影片建模。
 
-聲音與模式**暫定 Azure Personal Voice（zh-TW）＋ LITE mode**，但保留
-ElevenLabs PVC ＋ FULL mode 這條路，在階段 5 用盲測拍板。理由：
-兩者是設定切換不是重做，而拍攝那一趟只要把兩條路的素材都拿到，
-就不必在資訊不足的時候提早鎖死。
+**聲音與模式還沒拍板，而且它不是技術偏好題，是一個要 user 決定的取捨：**
+
+| | FULL | LITE ＋ 自控 LiveKit room |
+|---|---|---|
+| 她的聲音 | ✅ 內建克隆（拍那 2 分鐘就附帶生成） | ❌ 要 ElevenLabs PVC，另需 30 分鐘以上錄音 |
+| 訪客能不能讓她說出任意話 | ❌ 關不掉（LiveKit data channel） | ✅ 唯讀 token 真的關掉 |
+| 每分鐘 | 2 credits | 1 credit |
+
+Azure Personal Voice **已出局**——不是技術問題，是 Microsoft 的核准用途明文
+排除「user-generated／open-ended content」與「publishable output」，我們三條全踩。
+詳見階段 0-1。
 
 各選項的比較與被放棄的方案記在本檔末尾的「選型紀錄」。
+⚠️ 那一節有幾段標了「已作廢／已收回」，是刻意留著避免重蹈的，不要當成現行結論。
 
 每個階段都標了「誰做」與「完成判準」。**判準沒達成不要進下一階段**——
-這條路上有兩件事不可逆（老師的拍攝、Azure 的審核排隊），順序錯了會多等兩三週。
+這條路上真正不可逆的只有老師那一趟拍攝（階段 2），而它要在**花蓮**進行。
 
 ---
 
