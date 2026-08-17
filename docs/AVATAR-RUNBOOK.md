@@ -745,15 +745,70 @@ room 是 HeyGen 自己的 LiveKit（`wss://heygen-feapbkvq.livekit.cloud`），
 所以正確的規則從頭到尾只有一條，而且跟 token 權限無關：
 **`ws_url` 只留在伺服器端。** 它是唯一真的能讓她的臉對嘴任意音訊的東西。
 
-#### FULL 在這件事上結構性地更安全（現在有實測支撐）
+#### 🔴 再次收回：「FULL 結構性更安全」是錯的，通道只是換了路
 
-FULL 的回應**根本沒有 `ws_url` 欄位**。不是我們守得好，是這個通道不存在。
-代價是 FULL 必須讓訪客 `canPublish`（那是麥克風，是設計本意），
-但那條路通到的是 STT，訪客能做的就是「跟她講話」——那正是產品要的。
+我曾經寫「FULL 的回應根本沒有 `ws_url`，所以注入風險結構性消失」。
+**那是錯的。** 讀 SDK 原始碼（P2 裝套件時查的）發現控制指令有 fallback：
 
-反過來 LITE 想鎖到最緊（訪客 `canPublish: false`）就得自控 room，
-而那要一台常駐 agent worker（Vercel 跑不了）。**為了關一個沒有消費者的
-通道去養一台主機，不划算。**
+`node_modules/@heygen/liveavatar-web-sdk/lib/LiveAvatarSession/LiveAvatarSession.js`
+
+```js
+if (this._sessionEventSocket && readyState === OPEN) {
+  this.sendCommandEventToWebSocket(commandEvent);   // LITE：走 ws_url
+} else if (this.room.state === "connected") {
+  this.room.localParticipant.publishData(data, {
+    reliable: true,
+    topic: LIVEKIT_COMMAND_CHANNEL_TOPIC,           // FULL：走 LiveKit data channel
+  });
+}
+```
+
+`LIVEKIT_COMMAND_CHANNEL_TOPIC = "agent-control"`，而 `repeat(text)` 送的是
+`CommandEventsEnum.AVATAR_SPEAK_TEXT`——**用她的臉和聲音唸任意字串。**
+
+連帶要收回的是我上一節寫的「訪客發布 data message 沒有消費者」。
+**有消費者，就是 `agent-control` 這個 topic。** 我們實測到的
+`canPublishData: true` 正是讓它能用的權限。
+
+所以現況是：**兩種模式都有一條瀏覽器可及的注入通道，選模式關不掉它。**
+`repeat()` 與 `repeatAudio()` 在 SDK 裡都是 public method，訪客開 devtools
+就能呼叫。
+
+#### 唯一真的能關掉它的做法（成本比我先前以為的低）
+
+用 `livekit_config` 帶自己的 room，然後**我們自己簽訪客 token**，
+把 `canPublish` 與 `canPublishData` 都設成 false。
+
+先前我以為這需要一台常駐 agent worker，**那個顧慮是多餘的**：
+
+- LiveAvatar 用我們給的 agent token 加入**我們的** room 並發布影像
+- 訪客用我們簽的唯讀 token 訂閱
+- 音訊由我們的後端經 `ws_url` 送（LITE）
+- **我們的後端從頭到尾不需要加入 room**——簽 JWT 是純計算，Vercel 做得到
+
+代價只有一個 LiveKit 帳號，沒有常駐主機。
+
+⚠️ 但這條路只有 LITE 走得通。FULL 需要麥克風（`canPublish` 必須開），
+而且 session 設定本身也走 data channel，鎖掉會壞。
+
+**這讓 FULL／LITE 變成一個要拍板的取捨，不是可以兩全的：**
+
+| | FULL | LITE ＋ 自控 room |
+|---|---|---|
+| 她的聲音 | ✅ 內建克隆（2 分鐘影片附帶） | ❌ 要 ElevenLabs PVC（30 分鐘以上素材） |
+| 注入通道 | ❌ 關不掉（data channel） | ✅ 唯讀 token 真的關掉 |
+| 每分鐘 | 2 credits | 1 credits |
+| 多的東西 | 無 | LiveKit 帳號 |
+
+**這一題要 user 拍板，不要我自己選。** 它在「她的聲音有多像」與
+「訪客能不能讓她說出任意話」之間二選一，而後者對一位在世的公眾人物
+是名譽風險，不是技術偏好。
+
+#### 內容層的防線兩種模式都需要，而且擋不住這一條
+
+檢索門檻與 answer-guard 擋的是「誘導 RAG 產生不當回答」。
+`repeat()` **完全繞過我們的後端**——它不經過檢索、不經過 answer-guard，
+直接叫她唸。所以內容層不是這個問題的解，別再把兩件事混在一起講。
 
 #### Q3 的附帶收穫：時長上限是伺服器端強制的
 
