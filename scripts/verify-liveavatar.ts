@@ -30,9 +30,13 @@
 
 const API_BASE = "https://api.liveavatar.com";
 
-/** 官方文件列的 studio avatar（Alessandra in Black Suit，橫式）。純粹拿來借測。 */
-const STOCK_AVATAR_ID =
-  process.env.LIVEAVATAR_TEST_AVATAR_ID ?? "9c59a215-4c9f-478f-9d95-edca74c7b0d0";
+/**
+ * ⚠️ sandbox 只開放一個 avatar（官方文件明列的 Wayne），其他 avatar 一律回
+ * 「This avatar is not supported in sandbox mode」400。不要換成 studio avatar 的 id。
+ * 另外 sandbox 的 session 約一分鐘就會自己結束，那是刻意的，不是我們的 bug。
+ */
+const SANDBOX_AVATAR_ID =
+  process.env.LIVEAVATAR_TEST_AVATAR_ID ?? "dd73ea75-1218-4ef3-92ce-606d5f7fbc0a";
 
 /** 跟 lib/avatar-ledger 的預設值對齊，順便驗證這個數字會不會被打回票 */
 const MAX_SESSION_SECONDS = 180;
@@ -75,27 +79,61 @@ function decodeJwtPayload(jwt: string): Record<string, unknown> | null {
   }
 }
 
-async function mintToken(apiKey: string, mode: Mode): Promise<string> {
+/**
+ * ✅ Q3 已由這裡證實：`max_session_duration` 是**伺服器端強制**的。
+ *
+ * 送 180 秒到 Free／sandbox 會被 400 打回來，訊息是
+ * 「max_session_duration (180s) exceeds the maximum allowed (60s)」。
+ * 這正是我們要的行為——上限不是我們自律，是對方拒收。
+ *
+ * 這個函式把「被打回來的上限」解出來，好讓驗證能繼續跑完 Q1／Q2。
+ */
+function parseAllowedMax(message: string): number | null {
+  const match = message.match(/maximum allowed \((\d+)s\)/);
+  return match ? Number(match[1]) : null;
+}
+
+async function mintToken(
+  apiKey: string,
+  mode: Mode,
+  maxSeconds = MAX_SESSION_SECONDS
+): Promise<string> {
+  const body: Record<string, unknown> = {
+    mode,
+    avatar_id: SANDBOX_AVATAR_ID,
+    is_sandbox: true,
+    max_session_duration: maxSeconds,
+  };
+
+  // FULL 一定要帶 avatar_persona 或 voice_agent 其中「剛好一個」，兩個都不給會 422。
+  // 這裡帶最小的 avatar_persona：voice_id 留空＝用 avatar 的預設聲音。
+  // （avatar_persona 官方標記 deprecated，正式上線要改用 voice_agent；
+  //   但這支只是要探 token 權限，用最小可行的就好。）
+  if (mode === "FULL") body.avatar_persona = { language: "zh" };
+
   const response = await fetch(`${API_BASE}/v1/sessions/token`, {
     method: "POST",
     headers: { "X-API-KEY": apiKey, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      mode,
-      avatar_id: STOCK_AVATAR_ID,
-      is_sandbox: true,
-      max_session_duration: MAX_SESSION_SECONDS,
-    }),
+    body: JSON.stringify(body),
   });
 
-  const body = await response.json();
+  const result = await response.json();
   if (!response.ok) {
+    const allowed = parseAllowedMax(String(result?.message ?? ""));
+    if (allowed && allowed < maxSeconds) {
+      console.log(
+        `   [Q3] ✅ 伺服器端強制生效：送 ${maxSeconds} 秒被拒，上限是 ${allowed} 秒。` +
+          `\n        改用 ${allowed} 秒重試，繼續驗 Q1／Q2。`
+      );
+      return mintToken(apiKey, mode, allowed);
+    }
     throw new Error(
-      `鑄 token 失敗 ${response.status}：${JSON.stringify(body).slice(0, 400)}`
+      `鑄 token 失敗 ${response.status}：${JSON.stringify(result).slice(0, 400)}`
     );
   }
-  const token = body?.data?.session_token;
+  const token = result?.data?.session_token;
   if (!token) {
-    throw new Error(`回應裡沒有 session_token：${JSON.stringify(body).slice(0, 400)}`);
+    throw new Error(`回應裡沒有 session_token：${JSON.stringify(result).slice(0, 400)}`);
   }
   return token;
 }
@@ -204,7 +242,7 @@ async function probe(apiKey: string, mode: Mode) {
 
 async function main() {
   const apiKey = requireKey();
-  console.log(`借測用 avatar_id：${STOCK_AVATAR_ID}（sandbox，不扣 credits）`);
+  console.log(`借測用 avatar_id：${SANDBOX_AVATAR_ID}（sandbox，不扣 credits）`);
 
   for (const mode of ["LITE", "FULL"] as Mode[]) {
     try {

@@ -533,7 +533,9 @@ Fish Audio / Cartesia（2026-08-17 覆查，Azure 仍不在名單上）。Azure 
 1. 60 歲以上客製 avatar 的品質——公開資料完全空白，只能自己測（階段 1-3、5）
 2. 外掛音訊可能讓對嘴變差（柯如竣的一手實測，但測的是影片生成線不是即時線）
 3. 聲音克隆普遍會把高齡特徵「美化」掉（階段 5 的盲測第 2 項就是在測這個）
-4. **瀏覽器持有 `ws_url` = 訪客可以讓她的臉對嘴任意音訊**（見附錄 D 末節）
+4. ~~瀏覽器持有 `ws_url` = 訪客可以讓她的臉對嘴任意音訊~~
+   → 已定案，不再是未解風險：`ws_url` 只留伺服器端即可；FULL 模式連這個欄位
+   都沒有。實測結果見附錄 D「已實測」那節。
 
 ---
 
@@ -707,17 +709,60 @@ avatar 只同步從 `ws_url` 送進去的 PCM。
 （本檔更早的版本曾建議「把 WebSocket 交給瀏覽器以維持 serverless」——**那個建議
 要作廢**。省下來的那台主機，代價是把注入管道親手打開。）
 
-### 動工前的 30 分鐘驗證（報酬率最高的一步）
+### ✅ 已實測（2026-08-17，sandbox，`npm run verify:liveavatar`）
 
-不要靠推論拍板。用 LITE mode 打一次 HeyGen 託管的 `POST /v1/sessions/start`，
-把回傳的 `livekit_client_token` 當標準 JWT **base64 解 payload**，讀 `video` grant 裡的
-`canPublish` / `canSubscribe` / `canPublishData`。
+三題全部有答案，重跑指令就在 repo 裡，不要再憑推論討論這一段。
 
-- 若 client token 本來就沒有有效的注入權限 → 直接用 HeyGen 託管的 room，
-  LiveKit 那條線歸零，架構少一個元件、少一筆帳單
-- 若有 → 才需要自控 room
+| | LITE | FULL |
+|---|---|---|
+| `ws_url`（叫她開口的控制通道） | **有** | **沒有** |
+| `livekit_agent_token` | 有 | 沒有 |
+| client token `canSubscribe` | true | true |
+| client token `canPublish` | **true** | **true** |
+| client token `canPublishData` | **true** | **true** |
+| `max_session_duration` 送 180 | **被 400 拒**，回「maximum allowed (60s)」 | 同左 |
 
-**沙盒模式就能做這件事，不扣 credits。**
+room 是 HeyGen 自己的 LiveKit（`wss://heygen-feapbkvq.livekit.cloud`），
+每個 session 一個獨立 room id。
+
+#### 🔴 先前的猜測錯了，要收回
+
+我曾經推論「client token 可能本來就沒有發布權限，所以自控 room 大概不必要」。
+**實測是 `canPublish` 與 `canPublishData` 兩個都 true**，兩種模式都一樣。
+那個推論被直接證偽，不要再引用它。
+
+#### 但結論仍然是「不用自控 room」——理由換了
+
+權限寬鬆只有在**有東西在聽**的時候才是漏洞。逐條看訪客能做什麼：
+
+- 發布音訊軌 → **沒有任何元件在聽**。LITE 的音訊入口是 `ws_url`，不是 room；
+  而我們的互動在文字層，後端根本不訂閱 room 音訊。
+- 發布 data message → 同上，沒有消費者。
+- 發布視訊軌 → room 是 1:1，沒有第三人看得到。
+- 混進別人的 room → room id 編在對方 token 的 grant 裡，拿不到就進不去。
+- 灌流量 → 那是 **HeyGen 的** LiveKit 帳號，不是我們的；上行本來也免費。
+
+所以正確的規則從頭到尾只有一條，而且跟 token 權限無關：
+**`ws_url` 只留在伺服器端。** 它是唯一真的能讓她的臉對嘴任意音訊的東西。
+
+#### FULL 在這件事上結構性地更安全（現在有實測支撐）
+
+FULL 的回應**根本沒有 `ws_url` 欄位**。不是我們守得好，是這個通道不存在。
+代價是 FULL 必須讓訪客 `canPublish`（那是麥克風，是設計本意），
+但那條路通到的是 STT，訪客能做的就是「跟她講話」——那正是產品要的。
+
+反過來 LITE 想鎖到最緊（訪客 `canPublish: false`）就得自控 room，
+而那要一台常駐 agent worker（Vercel 跑不了）。**為了關一個沒有消費者的
+通道去養一台主機，不划算。**
+
+#### Q3 的附帶收穫：時長上限是伺服器端強制的
+
+送 180 秒被 400 打回來，訊息明確給出上限。也就是說單次時長不是我們自律，
+是對方拒收——訪客改 JS 繞不過去。`lib/avatar-ledger` 的第三道閘門因此
+降級為帳務記錄（見階段 1-1b）。
+
+⚠️ 實測值 60 秒是 sandbox／Free 的上限，不是我們上線後的值。
+Business 方案是 60 分鐘，我們會設 180 秒。**上線前要再跑一次確認 180 被接受。**
 
 ### 實作修正：`livekit_config` 的欄位名
 
