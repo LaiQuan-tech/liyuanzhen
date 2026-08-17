@@ -11,7 +11,8 @@
     "build:index": "tsx --env-file=.env.local scripts/build-index.ts",
     "eval:retrieval": "tsx --env-file=.env.local scripts/eval-retrieval.ts",
     "smoke:chat": "tsx --env-file=.env.local scripts/smoke-chat.ts",
-    "ingest:supabase": "tsx --env-file=.env.local scripts/ingest-supabase.ts"
+    "ingest:supabase": "tsx --env-file=.env.local scripts/ingest-supabase.ts",
+    "verify:liveavatar": "tsx --env-file=.env.local scripts/verify-liveavatar.ts"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",

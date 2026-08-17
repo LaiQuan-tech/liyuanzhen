@@ -132,7 +132,23 @@ LiveKit／Pipecat 那兩個 plugin 確實是常駐 worker（Vercel 跑不了）�
 
 完整的協定規格見本檔末尾「附錄 D：LITE mode 整合規格」。
 
+### 1-1b　`max_session_duration` 可以在伺服器端釘死　✅ 已查證
+
+鑄 token 的 schema 有 `max_session_duration`（秒），註明「Must be <= the configured
+limit for your subscription tier」。
+
+**這讓單次時長上限從「瀏覽器裡數秒數」升級成「LiveAvatar 伺服器端強制」。**
+前者訪客改個 JS 就繞過去了，後者不行。`lib/avatar-ledger` 的第三道閘門因此
+從「唯一防線」降級成「我們這側的帳務記錄」——實際執行的是對方。
+
+⚠️ 仍然要在我們這側記帳：伺服器端上限擋的是單次，擋不了同一個人連開 200 次。
+並發與月度預算兩道閘門的必要性沒有改變。
+
 ### 1-2　Sandbox 打通　🤖 我（需要你先給 API key）
+
+`scripts/verify-liveavatar.ts` 已經寫好，`npm run verify:liveavatar` 一鍵跑完。
+sandbox 不扣 credits，Free 方案就能跑。它會 LITE／FULL 各開一次，印出三題答案：
+訪客 token 能不能發布、`ws_url` 是不是只有 LITE 有、時長上限有沒有被接受。
 
 用 sandbox 模式（不扣 credits）把整條路跑通：token → session → 送音訊 → 出畫面。
 用官方的公開 avatar，**完全不需要老師的素材**。
@@ -705,9 +721,20 @@ avatar 只同步從 `ws_url` 送進去的 PCM。
 
 ### 實作修正：`livekit_config` 的欄位名
 
-本檔更早記的 `livekit_url` / `livekit_room` / `livekit_client_token` 是 **Pipecat wrapper
-的欄位名，不是官方 API 的**。官方 schema 只有兩個欄位，而且要的是 **agent token
-不是 client token**，room 名稱編在 token 的 `video.room` grant 裡：
+⚠️ **2026-08-17 再修正：先前這一段自己搞混了兩個不同的物件，別再被它誤導。**
+
+- **請求側** `livekit_config`（鑄 token 時可選）＝「我要用自己的 room」的覆寫，
+  官方 schema 是 `{url, token}`，要 **agent token**，room 編在 `video.room` grant 裡。
+  **不給這個欄位＝LiveAvatar 幫你開 room**（官方 lifecycle 明文：「The room is torn
+  down *if created by LiveAvatar*」）。所以自控 room 從頭到尾都是選配，不是必要。
+- **回應側** `livekit_url` / `livekit_client_token` / `livekit_agent_token`
+  ——這三個是**官方 `POST /v1/sessions/start` 的正式回應欄位**，不是 Pipecat 的。
+  先前寫「這是 Pipecat wrapper 的欄位名」是錯的，收回。
+
+回應同時給 client token 與 agent token 這件事本身就是線索：兩種 token 權限不同，
+給瀏覽器的應該是 client token。到底差在哪，`npm run verify:liveavatar` 會直接印出來。
+
+下面是**請求側**覆寫用的格式：
 
 ```json
 {
