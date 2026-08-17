@@ -16,32 +16,86 @@ ElevenLabs PVC ＋ FULL mode 這條路，在階段 5 用盲測拍板。理由：
 
 ## 階段 0：今天就要送出（前置時間最長，先送不吃虧）
 
-### 0-1　Azure Personal Voice 限制存取申請　👤 你
+### 0-1　🔴 Azure Personal Voice：很可能整條路走不通（2026-08-17 查證）
 
-網址：`aka.ms/customneural`（Personal Voice 與 Professional CNV 一起申請，不要只勾一個）
+**先不要送件。** 送出去大概率被拒，而且拒絕理由不是資格問題，是用途問題。
 
-**審核 1–3 週，這是整條路上最長的前置。** 送件不需要先決定任何技術細節，
-所以沒有理由晚送。草擬的填答內容見附錄 A，可直接複製。
+Microsoft 的 Transparency Note 明列 Personal Voice 的**唯一**四類核准用途，
+第一類（也是唯一可能沾到邊的一類）原文是：
 
-> 完成判準：收到 Microsoft 的受理回信（不是通過，是受理）。
+> Applications: For use in applications where voice output is **constrained and
+> defined by customers, and where the voice does not read user-generated or
+> open-ended content**. Voice model usage must remain within the application and
+> **output must not be publishable or shareable from the application.**
 
-### 0-2　開 HeyGen 帳號並問清楚方案　👤 你
+後面緊接著一句：「All other uses ... are **prohibited**.」
 
-先開免費帳號即可，**還不要刷卡**。要問客服／業務兩題：
+我們這個站三條全踩：訪客自由打字（user-generated）、Gemini 即時生成回答
+（open-ended）、公開網址人人可看可轉傳（publishable）。
 
-1. 哪一個方案層級可以建 **1080p 客製 avatar**？官方 Help Center 自相矛盾——
-   一處說「所有付費方案（$19 Starter 起）都可以」，另一處說「Business $475
-   才含 1 個免費 1080p 客製 avatar」。**這題沒問清楚不要刷卡。**
-2. 客製 avatar 的 slot 是否另外計費？月費多少？
+**這是政策層的不合格，不是文件寫得不夠好可以補救的那種。** 附錄 A 那份申請草稿
+先留著但不要送——除非改成「封閉展場、題目固定」的形態，那才落在核准用途內
+（見「一個重要的不對稱：展場沒有這個問題」一節，那邊的結論在這裡再次成立）。
 
-> 完成判準：拿到書面（email 或客服對話截圖）答覆，知道要刷哪一個方案、總共多少錢。
+> 完成判準：**這一項現在的狀態是「暫停」，不是「待辦」。** 聲音改走 0-1b。
 
-### 0-3　開 Azure 訂閱與 Speech resource　👤 你
+### 0-1b　聲音的替代路線（不需要任何申請）
 
-Region 要選**有支援 Personal Voice 的**（申請通過後 Microsoft 會給清單）。
-先開 resource 不影響審核，但可以先把計費與預算告警設好。
+查證發現 LiveAvatar 建客製 avatar 時，**會自動從那 2 分鐘影片生成她的聲音克隆**，
+不需要另外的素材、另外的同意、另外的廠商、另外的審核：
 
-> 完成判準：拿到 `AZURE_SPEECH_KEY` 與 `AZURE_SPEECH_REGION`，且已設預算上限。
+> Because the training footage includes speech, LiveAvatar automatically generates
+> a voice clone from the video.
+
+三條路的實際比較（都以「她要配合錄多久」為第一考量）：
+
+| | 素材需求 | 申請 | 每分鐘 | 狀態 |
+|---|---|---|---|---|
+| LiveAvatar 內建克隆 | 影片那 2 分鐘，不用加錄 | 不用 | 2 credits（FULL） | ✅ 可行 |
+| ElevenLabs PVC | **最少 30 分鐘、建議 1–3 小時**乾淨錄音 ＋ 本人即時驗證 | 不用 | 1 credit（LITE） | ⚠️ 素材門檻高 |
+| Azure Personal Voice | 1 分鐘 | 要，1–3 週 | 1 credit（LITE） | 🔴 用途不合格 |
+
+⚠️ **內建克隆只能在 FULL mode 用**（官方：「Voices are used in FULL Mode only.
+In LITE Mode, you bring your own audio pipeline」）。所以選她的內建克隆＝選 FULL＝
+每分鐘 2 credits。**聲音與模式仍然是綁在一起的一個決定。**
+
+ElevenLabs 那條的素材門檻先前被我低估了。她是公眾人物，演講與訪談錄音可能湊得到
+30 分鐘，但要單一講者、無背景音、無主持人插話——訪談檔多半不合格，演講檔才有機會。
+**這是可以現在就去盤點的，不用等她。**
+
+### 0-2　開 LiveAvatar 帳號　👤 你
+
+⚠️ **不是 heygen.com。** LiveAvatar 已經拆成獨立產品、獨立網域、獨立計費：
+註冊在 `app.liveavatar.com`、文件在 `docs.liveavatar.com`、API base 是
+`https://api.liveavatar.com`（**不是 `api.heygen.com`**）。heygen.com 的方案表
+（Creator $29／Pro $49／Business $149）跟我們完全無關，別看錯。
+
+方案問題已經查清楚，不用再問客服（liveavatar.com/#pricing，2026-08-17）：
+
+| 方案 | 月費 | credits | 單次上限 | 並發 | 浮水印 | 1080p 客製 avatar |
+|---|---|---|---|---|---|---|
+| Free | $0 | 10 | 2 分 | 1 | 有 | ✗ |
+| Starter | $19 | 150 | 5 分 | 5 | **有** | ✗ |
+| Essential | $99 | 1,000 | 20 分 | 20 | 無 | ✗ |
+| **Business** | **$475** | **5,000** | 60 分 | **40** | 無 | **含 1 個** |
+| Enterprise | 洽談 | — | 可調 | 100 起 | 無 | — |
+
+超額計費 $0.10/credit（Starter 是 $0.12/min）。LITE 1 credit/分、FULL／Embed
+2 credits/分——**這三個數字讓先前那份成本估算完全對得上，不用重算。**
+
+還剩一題要問業務：**第二個以後的 avatar slot 多少錢**（文件只說「purchase slots
+as add-ons」沒標價）。我們短期只需要 1 個，Business 已含，所以這題不擋路。
+
+> 完成判準：`app.liveavatar.com` 有帳號、拿到 API key（Free 方案即可，先不刷卡）。
+> 有了 key 我就能跑 1-2 的 sandbox 驗證，那一步不花 credits。
+
+### 0-3　~~開 Azure 訂閱與 Speech resource~~　🔴 取消
+
+隨 0-1 一起暫停。**先不要開訂閱、不要刷卡。**
+
+（唯一還值得做的 Azure 事項：Speech Studio 的 Personal Voice **demo** 只要 S0
+resource 就能試，不需要 API 核准。但那只能拿來聽音質，不能上線——demo 產出的
+聲音一樣受同一份用途政策約束。目前沒有非做不可的理由。）
 
 ### 0-4　換掉共用的 Gemini key　👤 你
 
@@ -69,8 +123,12 @@ LiveKit／Pipecat 那兩個 plugin 確實是常駐 worker（Vercel 跑不了）�
 「語音進、語音出」的 voice agent；我們的互動發生在文字層（訪客打字 → RAG），
 房間裡沒有麥克風音訊要做 STT，所以 worker 唯一能提供的價值我們根本用不到。
 
-**分工：** Vercel 只負責三支短命的 HTTP route（鑄 token、開 session、Azure TTS
-proxy）；整段 session 的 WebSocket 由**瀏覽器**持有，不受 function timeout 影響。
+**分工：** Vercel 只負責幾支短命的 HTTP route（鑄 token、開 session、TTS proxy）。
+
+⚠️ **這裡原本寫「整段 session 的 WebSocket 由瀏覽器持有」——那句已收回。**
+`ws_url` 就是「叫她開口說任意音訊」的控制通道，交給瀏覽器等於親手把注入管道
+打開。省一台常駐主機不值得這個代價。正確規則見附錄 D-8：**`ws_url` 只留在
+伺服器端。** 走 FULL mode 的話這個問題不存在（音訊完全在 HeyGen 那側合成）。
 
 完整的協定規格見本檔末尾「附錄 D：LITE mode 整合規格」。
 
@@ -115,22 +173,33 @@ proxy）；整段 session 的 WebSocket 由**瀏覽器**持有，不受 function
 |---|---|---|---|
 | 1 | 分身影片 | **2 分鐘一鏡到底不可剪接**：靜默聆聽 15 秒 → 說話 90 秒 → 靜默 15 秒。胸上景、1080p | HeyGen 建模 |
 | 2 | 同意影片 | 老師**本人對 webcam 即時錄**，不能預錄不能代錄，平台會給驗證碼要唸。**可以用中文講** | HeyGen 授權 |
-| 3 | 聲音素材 | **60–90 分鐘訪談形式**錄音，涵蓋婦運史與文學評論的專有名詞 | Azure ＋ ElevenLabs 克隆 |
-| 4 | Azure 同意句 | 一句話，可預錄、可我方代傳。原文見附錄 C | Azure 授權 |
+| 3 | 聲音素材 | **最少 30 分鐘、建議 60–90 分鐘**訪談形式錄音，單一講者、無主持人插話、涵蓋婦運史與文學評論的專有名詞 | ElevenLabs PVC（備案） |
+| 4 | ~~Azure 同意句~~ | 🔴 **取消**——Azure Personal Voice 用途不合格，見階段 0-1 | — |
 | 5 | ElevenLabs voice captcha | 本人當場對麥克風唸平台給的隨機句，10 秒內完成，過聲紋比對。失敗次數有限 | ElevenLabs 授權 |
+| 6 | **待機 loop** | 她安靜看鏡頭、自然呼吸眨眼的 **30–60 秒**，可無縫循環。跟第 1 項同機同燈同位置連著錄 | 網站省錢用，見下 |
 
-**第 5 項為什麼是必做而不是可選**
+**第 6 項是這份清單裡投報率最高的一項**
 
-技術路線（Azure＋LITE vs ElevenLabs＋FULL）在拍攝當下還不必定案——客製 avatar 建好
-之後，兩種模式是設定切換不是重做，同一張臉可以兩種都試，用階段 5 的盲測決定。
+訪客一進站先播這段預錄影片，等他真的送出第一個問題才開 session。公開網站跳出率
+通常四到六成，這一招砍掉三到五成的計費分鐘——1 萬人次的情境下一個月省
+US$900–1,500，三萬人次省 US$2,700–4,500。**而它的成本是拍攝當天多錄一分鐘。**
 
-但這件事的前提是**兩條路的素材都要在這一趟拿到**。ElevenLabs 的 captcha 不能事後補，
-所以現場多花十分鐘，換一個可能音色最像的選項留在檯面上。
+⚠️ 一定要在同一場、同機位、同打光錄完。事後補拍會對不上，切換的瞬間會跳一下，
+那比沒有待機畫面還糟。
 
-她本來就要為了 HeyGen 的同意影片坐到電腦前做一次即時流程，多做一個 captcha
-不是新的類別，只是多十分鐘。
+**第 3、5 項現在是備案，不是主線**
 
-**這一趟真正不可逆的只有第 1 項那 2 分鐘。** 其他都還能重來，技術路線可以晚兩週再定。
+主線改成用 LiveAvatar 從第 1 項那 2 分鐘影片自動生成的聲音克隆（見階段 0-1b），
+不需要額外素材。第 3、5 項留著的理由只有一個：**萬一內建克隆的繁中專有名詞
+讀音差到不能用**，ElevenLabs PVC 是唯一還站得住的備案，而它的素材與 captcha
+都不能事後補。
+
+素材門檻要說清楚：ElevenLabs 官方要求**最少 30 分鐘、理想 1–3 小時**，且必須
+單一講者、無背景音。訪談形式若有主持人聲音會不合格——要嘛主持人全程不出聲，
+要嘛分軌錄。**她的公開演講錄音可能已經湊得到，這件事現在就能去盤點，不用等她。**
+
+**這一趟真正不可逆的只有第 1 項那 2 分鐘（＋緊接著的第 6 項）。**
+其他都還能重來，聲音路線可以晚兩週再定。
 
 **錄音的兩個反直覺要求：**
 
@@ -297,20 +366,28 @@ NEXT_PUBLIC_DEMO_MODE=
 # 已有（Phase 1 加的）
 NEXT_PUBLIC_AVATAR_PROVIDER= # monogram（預設）| mock | heygen
 
-# 還沒有——HeyGen
-HEYGEN_API_KEY=              # 階段 0-2
+# 還沒有——LiveAvatar（⚠️ 是 liveavatar.com 的 key，不是 heygen.com 的）
+LIVEAVATAR_API_KEY=          # 階段 0-2，app.liveavatar.com → developers
 LIVEAVATAR_AVATAR_ID=        # 階段 3-1，要等老師拍完 ＋ 24 小時
+LIVEAVATAR_VOICE_ID=         # 建 avatar 時自動生成的她的聲音克隆（FULL mode 用）
 AVATAR_ENABLED=              # killswitch，出事時手動關
 
-# 還沒有——Azure
-AZURE_SPEECH_KEY=            # 階段 0-3
-AZURE_SPEECH_REGION=         # 要選支援 Personal Voice 的 region
-AZURE_VOICE_PROFILE_ID=      # 階段 3-2
+# 還沒有——Azure　🔴 全部暫停，見階段 0-1
+# AZURE_SPEECH_KEY=
+# AZURE_SPEECH_REGION=
+# AZURE_VOICE_PROFILE_ID=
 ```
+
+⚠️ 舊名 `HEYGEN_API_KEY` 已改為 `LIVEAVATAR_API_KEY`——兩者是**不同的帳號、
+不同的 key、不同的計費池**，混用會 401。
 
 ---
 
-## 附錄 A：Azure 限制存取申請草稿
+## 附錄 A：Azure 限制存取申請草稿　🔴 暫緩送件（2026-08-17）
+
+> **不要送。** 不是草稿寫得不好，是用途不合格——見階段 0-1。
+> 這份留著的唯一理由：若改成封閉展場（題目固定、非公開網址），用途就落回
+> 核准範圍內，這份可以直接送。內容本身仍然有效。
 
 Microsoft 審這張表看的是「你有沒有想過濫用風險」。這個專案的答案剛好都很強——
 揭露機制不是事後補的，是一開始就寫進架構的。
@@ -373,7 +450,19 @@ Microsoft 審這張表看的是「你有沒有想過濫用風險」。這個專�
 （Docket.io，實際 production 的公司測了 5 家）評 idle 行為最自然——展場裡她大部分
 時間是安靜地看著人，這比說話時的口型更容易露餡；每分鐘便宜約 3 倍；入門月費較低。
 
-**聲音為什麼暫定 Azure 而不是 ElevenLabs**
+**🔴 2026-08-17 作廢：下面這整段「暫定 Azure」的推論前提已經不成立**
+
+理由不是技術，是用途政策——Azure Personal Voice 的核准用途明文排除
+「user-generated／open-ended content」與「publishable output」，我們三條全踩。
+詳見階段 0-1。**不要再拿下面兩點理由去重啟這個討論**，那兩點沒有錯，
+只是它們在一個不合格的選項上比較優劣，沒有意義。
+
+以下保留原文，只為了記錄「Azure 的 lexicon 優勢是真的」——如果哪天改做封閉展場
+（用途就合格了），這段直接可以復活。
+
+---
+
+**聲音為什麼暫定 Azure 而不是 ElevenLabs**（已作廢，見上）
 
 純論音色像不像她，證據其實指向 ElevenLabs PVC（真的微調模型權重，而不是 zero-shot
 condition；且 ALS 語音銀行社群是目前唯一大量處理衰退語音的實戰紀錄）。
@@ -402,14 +491,27 @@ condition；且 ALS 語音銀行社群是目前唯一大量處理衰退語音的
   ——**錯的**。官方沒有任何伺服器端「叫她講話」的 HTTP 端點，兩種模式都只能從
   瀏覽器驅動。詳見附錄 D-8。
 
-**為什麼是 LITE（在選 Azure 的前提下沒有別的選擇）**
+**模式：Azure 出局之後只剩兩條，而且都不是原本那條**
 
-FULL mode 的 custom TTS 只支援 ElevenLabs / Fish Audio / Cartesia 三家，**Azure 不在
-名單上**。所以「Azure ＋ LiveAvatar」只有 LITE 一條路。反過來說，如果最後盲測是
-ElevenLabs 勝出，那就會連帶改用 FULL。**聲音與模式是綁在一起的一個決定，不是兩個。**
+原本的推論是「選 Azure ⇒ 只能 LITE」，因為 FULL 的 custom TTS 只吃 ElevenLabs /
+Fish Audio / Cartesia（2026-08-17 覆查，Azure 仍不在名單上）。Azure 出局後改成：
 
-而 LiveAvatar 內建語音只有籠統的 `zh`，沒有 zh-TW，所以「用內建語音」從一開始就不在
-選項內。
+- **FULL ＋ 她的內建克隆**：2 credits/分。聲音跟著 avatar 一起生出來，零額外素材、
+  零額外廠商。LLM 可以接我們自己的（官方有 Custom LLM Integration），所以 RAG 與
+  answer-guard 都保得住。
+- **LITE ＋ ElevenLabs PVC**：1 credit/分，但要先湊到 30 分鐘以上她的乾淨錄音。
+
+以 1 萬人次 × 3 分鐘/月估，FULL 比 LITE 貴約 US$3,000/月。**這筆錢買的是
+「不用為了聲音再跟她要 30 分鐘素材」以及「少一個廠商」。**
+
+⚠️ 走 FULL ＋ Custom LLM 的話，answer-guard 的回收機制要在**我們的 endpoint 內**
+處理完才吐字——不能邊生成邊 streaming 給 HeyGen，否則被回收的那段已經用她的聲音
+講出去了。這跟先前定的「等整段答案才開口」是同一條規則，只是實作位置從瀏覽器
+移到伺服器。
+
+**「用內建語音」先前被排除的理由要修正**：當時說 LiveAvatar 內建語音只有籠統的
+`zh` 沒有 zh-TW——那句話對的是**現成語音庫**，不適用於**從她本人影片生成的克隆**。
+克隆學的是她自己的口音，不存在「選到對岸腔」的問題。這個排除理由撤銷。
 
 **已知的未解風險**
 1. 60 歲以上客製 avatar 的品質——公開資料完全空白，只能自己測（階段 1-3、5）
