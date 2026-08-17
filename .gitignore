@@ -29,3 +29,8 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# 本機預覽用的參考圖。刻意不進 repo：
+# 這些是他人拍攝的既有照片，著作權不在我們手上（見 docs/AVATAR-RUNBOOK.md 附錄 B），
+# 而且站上的護欄文案目前還寫著「尚未取得肖像授權」。commit 進去就會跟著部署上線。
+public/dev/
