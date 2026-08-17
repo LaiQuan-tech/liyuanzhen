@@ -27,11 +27,80 @@ interface TokenResponse {
   reason?: string;
 }
 
+/** 合成端點。回 `{ chunks, seconds }`，chunks 是 base64 PCM 16-bit 24kHz。 */
+const TTS_ENDPOINT = "/api/tts";
+
+/**
+ * ⚠️ SDK v0.0.18 的缺口：官方 LITE 協定有 `agent.speak_end` 用來標示一段話結束，
+ * 但 SDK 的 `CommandEventsEnum` **沒有**這個事件，也沒有對應的方法。
+ *
+ * 後果是 `avatar.speak_ended` 有可能永遠不回來，那樣 UI 會卡在「回答中」，
+ * 而且「停止」按鈕會一直亮著——跟 Phase 0 修掉的那個狀態機死鎖是同一種症狀。
+ *
+ * 所以這裡用「音訊實際長度 ＋ 緩衝」當保險。它只負責把狀態收乾淨，
+ * 不影響聲音本身；真的收到 speak_ended 就以事件為準，這條保險會被取消。
+ */
+const SPEAK_FALLBACK_GRACE_MS = 2_000;
+
 export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
   let session: LiveAvatarSession | null = null;
   let prepared = false;
   let preparing = false;
   let dead = false;
+  let speakingFallback: ReturnType<typeof setTimeout> | null = null;
+
+  function clearSpeakingFallback() {
+    if (speakingFallback !== null) {
+      clearTimeout(speakingFallback);
+      speakingFallback = null;
+    }
+  }
+
+  /**
+   * 取得克隆語音並逐塊送進 avatar 的播放緩衝。
+   *
+   * ⚠️ 只有 LITE mode 有 `repeatAudio`——它需要 SDK 持有的那條 WebSocket，
+   * FULL mode 沒有，呼叫會丟例外。所以先看 `session.mode`，
+   * FULL 就直接走內建語音（那邊的聲音是在 session 設定裡指定的）。
+   */
+  async function speakWithClonedVoice(
+    active: LiveAvatarSession,
+    text: string
+  ): Promise<void> {
+    if (active.mode !== "LITE") {
+      active.repeat(text);
+      return;
+    }
+
+    const response = await fetch(TTS_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!response.ok) throw new Error(`TTS ${response.status}`);
+
+    const { chunks, seconds } = (await response.json()) as {
+      chunks: string[];
+      seconds: number;
+    };
+    if (dead || !chunks?.length) return;
+
+    // 每塊約 1 秒、遠低於 1 MB 的封包上限。speak 的語意是 append，
+    // 所以照順序送就會連成一段連續的話。
+    for (const chunk of chunks) {
+      if (dead) return;
+      active.repeatAudio(chunk);
+    }
+
+    clearSpeakingFallback();
+    speakingFallback = setTimeout(
+      () => {
+        speakingFallback = null;
+        hooks.onSpeakingChange(false);
+      },
+      seconds * 1000 + SPEAK_FALLBACK_GRACE_MS
+    );
+  }
 
   /**
    * ⚠️ 刻意不做 keepAlive 輪詢，雖然 SDK 有 `session.keepAlive()`。
@@ -93,12 +162,14 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
 
         // 說話狀態直接用官方事件，不要自己用文字長度估時間——
         // 估的那套在 mock 裡是刻意的假時序，在這裡會跟真實嘴型對不上。
-        next.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, () =>
-          hooks.onSpeakingChange(true)
-        );
-        next.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, () =>
-          hooks.onSpeakingChange(false)
-        );
+        next.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, () => {
+          hooks.onSpeakingChange(true);
+        });
+        next.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, () => {
+          // 真的收到事件就以事件為準，取消那條以時間估算的保險
+          clearSpeakingFallback();
+          hooks.onSpeakingChange(false);
+        });
 
         // 斷線一律當成不可恢復：呼叫端會降級回 monogram。
         // 這裡不重連——重連等於重新計費，而且使用者已經看到畫面停住了。
@@ -151,15 +222,23 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
       const text = fullText.trim();
       if (!text) return;
 
-      // ⚠️ 必須先 interrupt。`repeat` 的語意是**排隊**不是打斷——
+      // ⚠️ 必須先 interrupt。speak 的語意是**排隊**不是打斷——
       // 官方文件原文是「Adds audio to the avatar's playback buffer」。
       // 訪客連續送問題時，少了這一行她會把上一題講完才開始這一題。
       session.interrupt();
-      session.repeat(text);
+      clearSpeakingFallback();
+
+      // 用她的克隆聲音。失敗時退回 HeyGen 內建語音，寧可聲音不像，
+      // 也不要整個回答變成無聲——文字使用者已經看到了。
+      speakWithClonedVoice(session, text).catch((error) => {
+        console.error("[avatar] 克隆語音失敗，改用內建語音：", error);
+        if (!dead && session) session.repeat(text);
+      });
     },
 
     stop() {
       if (dead || !session) return;
+      clearSpeakingFallback();
       session.interrupt();
       hooks.onSpeakingChange(false);
     },
@@ -167,6 +246,7 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
     async destroy() {
       dead = true;
       prepared = false;
+      clearSpeakingFallback();
       const current = session;
       session = null;
       if (!current) return;
