@@ -264,3 +264,8 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
+// ⚠️ 不要刪這一行。這支檔案沒有任何 import，少了它 TypeScript 會把整份當成
+// **全域腳本**而不是 module，於是 `main()` 跟 scripts/ 底下其他腳本的 `main()`
+// 撞成 TS2393，而且症狀是 `npm run build` 失敗——離現場很遠，很難聯想。
+export {};

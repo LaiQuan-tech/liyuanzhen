@@ -30,17 +30,40 @@ describe("resolveProvider", () => {
 });
 
 describe("createAvatarDriver", () => {
-  it("⚠️ heygen 還沒實作時要自動降級成 monogram，而不是讓整頁掛掉", async () => {
+  it("⚠️ heygen 模組載入失敗要降級成 monogram，而不是讓整頁掛掉", async () => {
+    // 這個測試原本靠「heygen.ts 還不存在」來製造失敗。模組實作出來之後
+    // 那個前提消失了，但要守的行為沒變，所以改成明確地把載入弄壞。
+    // 真實世界對應的情境：SDK 版本不合、chunk 404、CSP 擋掉。
     const { hooks, fatal } = makeHooks();
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const driver = await createAvatarDriver(hooks, "heygen");
+    vi.resetModules();
+    vi.doMock("./heygen", () => {
+      throw new Error("模擬 SDK chunk 載入失敗");
+    });
+
+    const { createAvatarDriver: freshCreate } = await import("./index");
+    const driver = await freshCreate(hooks, "heygen");
 
     expect(driver.provider).toBe("monogram");
     // 降級不是錯誤：使用者什麼都沒失去，不該把它當 fatal 彈出去
     expect(fatal).toHaveLength(0);
     expect(spy).toHaveBeenCalled();
+
     spy.mockRestore();
+    vi.doUnmock("./heygen");
+    vi.resetModules();
+  });
+
+  it("heygen 就給 heygen（SDK 只在 prepare 時才載，建構本身不連外）", async () => {
+    const { hooks } = makeHooks();
+    const driver = await createAvatarDriver(hooks, "heygen");
+
+    expect(driver.provider).toBe("heygen");
+    expect(driver.needsVideo).toBe(true);
+    expect(driver.metered).toBe(true);
+    // prepare 之前不該宣稱自己出得了聲
+    expect(driver.audioAvailable).toBe(false);
   });
 
   it("mock 就給 mock", async () => {
@@ -52,6 +75,38 @@ describe("createAvatarDriver", () => {
     const { hooks } = makeHooks();
     expect((await createAvatarDriver(hooks, "monogram")).needsVideo).toBe(false);
     expect((await createAvatarDriver(hooks, "mock")).needsVideo).toBe(true);
+  });
+});
+
+describe("createHeygenDriver", () => {
+  it("⚠️ 沒有 <video> 就 onFatal，不可以開 session——開了也沒地方畫，純燒錢", async () => {
+    const { hooks, fatal } = makeHooks();
+    const driver = await createAvatarDriver(hooks, "heygen");
+
+    await driver.prepare(null);
+
+    expect(fatal).toHaveLength(1);
+    expect(driver.audioAvailable).toBe(false);
+  });
+
+  it("prepare 沒成功之前，finish／stop 都要靜靜地不做事（不能丟例外）", async () => {
+    const { hooks, speaking } = makeHooks();
+    const driver = await createAvatarDriver(hooks, "heygen");
+
+    expect(() => driver.finish("婦女新知是怎麼開始的？")).not.toThrow();
+    expect(() => driver.stop()).not.toThrow();
+    driver.push("串流中的片段");
+
+    // 沒有 session 就不該回報任何說話狀態，否則 UI 會卡在「回答中」
+    expect(speaking).toEqual([]);
+  });
+
+  it("destroy 可以重複呼叫（切分頁＋離開頁面會各觸發一次）", async () => {
+    const { hooks } = makeHooks();
+    const driver = await createAvatarDriver(hooks, "heygen");
+
+    await expect(driver.destroy()).resolves.toBeUndefined();
+    await expect(driver.destroy()).resolves.toBeUndefined();
   });
 });
 

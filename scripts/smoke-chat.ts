@@ -81,3 +81,7 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
+
+// ⚠️ 同 scripts/verify-liveavatar.ts 末尾的理由：沒有 import 的 .ts 會被當成
+// 全域腳本，`main()` 就會跟其他腳本互撞。新增腳本時也補上這一行。
+export {};
