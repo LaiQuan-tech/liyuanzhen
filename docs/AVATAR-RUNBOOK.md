@@ -212,6 +212,50 @@ sandbox 不扣 credits，Free 方案就能跑。它會 LITE／FULL 各開一次�
 
 > 完成判準：sandbox avatar 在 liyuanzhen 的 `/chat` 頁面上動起來並講話。
 
+### 1-4　✅ 端到端實測（2026-08-18，真機、真帳號、真計費）
+
+**整條鏈路已經打通並實測過：** 訪客打字 → RAG ＋ Gemini → ElevenLabs 克隆聲音
+→ LiveAvatar 對嘴 → 她的臉開口說話。1280×720 串流，`readyState 4`。
+
+#### 延遲：12.9 秒 → 7.7 秒
+
+| 階段 | 改善前 | 改善後 |
+|---|---|---|
+| `/api/chat`（RAG ＋ Gemini） | 3,842ms | 4,396ms |
+| `/api/tts` 首位元組 | **7,768ms**（等整包） | **1,963ms**（串流） |
+| LiveAvatar 開始播 | ~900ms | ~760ms |
+| **從送出到她開口** | **12,902ms** | **7,698ms** |
+
+關鍵是 ElevenLabs 要用 `/stream` 端點，而且**整條路上不能有任何一段等完整音訊**——
+route 邊收邊轉、driver 邊收邊送進播放緩衝。改回等整包就會退回 12.9 秒。
+
+⚠️ 剩下的 4.4 秒在 `/api/chat`，那是**結構性的**：driver 必須等整段答案才開口，
+因為 answer-guard 會回收已送出的文字（見 `speakableAnswer` 的註解）。
+要壓這一段就得動 answer-guard 的設計，不是調參數。
+
+#### 順帶修掉一個 UI bug
+
+`/api/chat` 結束到她真的出聲之間，`busy` 已是 false、`speaking` 還是 false，
+`deriveAvatarState` 因此回 idle——畫面顯示「線上・可語音朗讀」，使用者看到
+答案文字出現、她卻一臉閒著不動 2.7 秒（串流化之前是 8.6 秒）。
+改成開始合成就報「說話中」。
+
+#### 兩個實測到的計費事實
+
+- **只鑄 token 不扣點。** 連續鑄兩張，點數不變（147.4 → 147.4）。
+  計費從 `sessions/start` 起算。**這確認了「訪客真的開口才開 session」那個
+  省 30–50% 費用的槓桿可行。**
+- **LITE 費率確認：** 一個 54 秒的 session 扣 0.9 點 ＝ 1 點/分。
+
+#### ⚠️ 兩個踩過的坑
+
+1. **內建瀏覽器面板不解 WebRTC 影像。** 軌是 `live`、`srcObject` 有值，但
+   `readyState` 永遠 0、零影格。同樣的程式在真正的 Chrome 上是 1280×720 正常播放。
+   **驗收 avatar 一定要用真瀏覽器**，不要用預覽面板下結論。
+2. **dev server 跑著的時候不要 `npm run build`。** 它會蓋掉 dev 的 `.next`，
+   症狀是 console 出現 minified React #418/#423（hydration 失敗），
+   而 dev 模式本來不該有 minified chunk。要 build 先停 server。
+
 ### 1-3　用現成聲音驗證繁中對嘴　🤖 我 ＋ 👤 你付 $19
 
 這是**唯一**能回答「LiveAvatar 的繁中對嘴到底行不行」的方法，而且不需要老師的分身。

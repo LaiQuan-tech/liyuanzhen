@@ -27,7 +27,7 @@ interface TokenResponse {
   reason?: string;
 }
 
-/** 合成端點。回 `{ chunks, seconds }`，chunks 是 base64 PCM 16-bit 24kHz。 */
+/** 合成端點。回**串流的裸 PCM**（16-bit / 24kHz / 單聲道），不是 JSON。 */
 const TTS_ENDPOINT = "/api/tts";
 
 /**
@@ -41,6 +41,32 @@ const TTS_ENDPOINT = "/api/tts";
  * 不影響聲音本身；真的收到 speak_ended 就以事件為準，這條保險會被取消。
  */
 const SPEAK_FALLBACK_GRACE_MS = 2_000;
+
+/**
+ * 合成期間的保險上限。這條只在「提前報說話中」到「算出真實音訊長度」之間有效，
+ * 正常情況下兩秒內就會被真實長度的 timeout 取代。
+ * 存在的意義是：TTS 整個掛掉時，UI 不會永遠卡在「回答中」。
+ */
+const SPEAK_STARTUP_TIMEOUT_MS = 20_000;
+
+/** PCM 16-bit 24kHz 單聲道：24000 × 2 ＝ 每秒 48000 bytes */
+const BYTES_PER_SECOND = 48_000;
+/** 官方建議每塊約 1 秒，遠低於 1 MB 的封包上限 */
+const CHUNK_BYTES = BYTES_PER_SECOND;
+
+/**
+ * Uint8Array → base64。分段處理而不是一次 spread——
+ * 一秒的音訊是 48000 個位元組，`String.fromCharCode(...arr)` 會爆 call stack。
+ */
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const STEP = 8192;
+  for (let i = 0; i < bytes.length; i += STEP) {
+    const slice = bytes.subarray(i, i + STEP);
+    for (let j = 0; j < slice.length; j++) binary += String.fromCharCode(slice[j]);
+  }
+  return btoa(binary);
+}
 
 export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
   let session: LiveAvatarSession | null = null;
@@ -72,25 +98,64 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
       return;
     }
 
+    // ⚠️ 這裡就先報「說話中」，不要等 AVATAR_SPEAK_STARTED。
+    //
+    // 實測：/api/chat 結束到她真的出聲之間有 2.7 秒，那段時間 busy 已經是 false、
+    // speaking 還是 false，deriveAvatarState 因此回 idle——畫面顯示「線上・可語音朗讀」，
+    // 使用者看到答案文字出現、她卻一臉閒著不動。那是 bug 不是延遲。
+    //
+    // 提前報的代價是「回答中」會比實際出聲早兩秒出現，而那正好是使用者的預期。
+    // 保險 timeout 先給一個寬鬆值，等算出真實音訊長度再換掉。
+    hooks.onSpeakingChange(true);
+    clearSpeakingFallback();
+    speakingFallback = setTimeout(() => {
+      speakingFallback = null;
+      hooks.onSpeakingChange(false);
+    }, SPEAK_STARTUP_TIMEOUT_MS);
+
     const response = await fetch(TTS_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-    if (!response.ok) throw new Error(`TTS ${response.status}`);
+    if (!response.ok || !response.body) throw new Error(`TTS ${response.status}`);
 
-    const { chunks, seconds } = (await response.json()) as {
-      chunks: string[];
-      seconds: number;
+    // 邊收邊送。每收滿約一秒就丟一塊進播放緩衝，她在講第一塊時後面的還在傳——
+    // 這是把「送出問題到她開口」從 12.9 秒壓下來的關鍵，不要改回等整包。
+    const reader = response.body.getReader();
+    let pending = new Uint8Array(0);
+    let totalBytes = 0;
+
+    const flush = (bytes: Uint8Array) => {
+      if (dead || !bytes.length) return;
+      active.repeatAudio(toBase64(bytes));
     };
-    if (dead || !chunks?.length) return;
 
-    // 每塊約 1 秒、遠低於 1 MB 的封包上限。speak 的語意是 append，
-    // 所以照順序送就會連成一段連續的話。
-    for (const chunk of chunks) {
-      if (dead) return;
-      active.repeatAudio(chunk);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (dead) {
+        reader.cancel().catch(() => {});
+        return;
+      }
+      if (value?.length) {
+        const merged = new Uint8Array(pending.length + value.length);
+        merged.set(pending);
+        merged.set(value, pending.length);
+        pending = merged;
+        totalBytes += value.length;
+
+        while (pending.length >= CHUNK_BYTES) {
+          flush(pending.subarray(0, CHUNK_BYTES));
+          pending = pending.subarray(CHUNK_BYTES);
+        }
+      }
+      if (done) break;
     }
+    // 最後不足一秒的殘塊也要送，否則句尾會被吃掉。
+    // ⚠️ 一定要對齊到偶數 byte——切在 16-bit 取樣中間會讓整塊變雜訊。
+    flush(pending.subarray(0, pending.length - (pending.length % 2)));
+
+    const seconds = totalBytes / BYTES_PER_SECOND;
 
     clearSpeakingFallback();
     speakingFallback = setTimeout(

@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { synthesize, hasTtsCredentials } from "@/lib/voice";
+import { synthesizeStream, hasTtsCredentials } from "@/lib/voice";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -63,8 +63,16 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { chunks, seconds } = await synthesize(text.trim());
-    return json({ chunks, seconds });
+    const stream = await synthesizeStream(text.trim());
+    // 原封不動轉給瀏覽器。⚠️ 不要在這裡收集成完整 buffer 再回——
+    // 那等於把串流退化回等整包，12.9 秒的延遲就是這樣來的。
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Cache-Control": "no-store",
+        "X-Audio-Format": "pcm_s16le_24000_mono",
+      },
+    });
   } catch (error) {
     // 合成失敗不該讓聊天壞掉——前端收到非 200 就靜音顯示文字，答案仍然看得到。
     console.error("[tts] 合成失敗：", error);
