@@ -1,8 +1,11 @@
 import type { Config } from "tailwindcss";
 
 /**
- * 色票與字體直接對應提案簡報 liyuanzhen-pitch/index.html 的 :root 變數，
- * 讓網站與 deck 是同一套視覺語言。改這裡等於改設計系統。
+ * ⚠️ 色票是**雙軌**的：這裡與 app/globals.css 的 :root 各寫一份，
+ * 兩邊的值必須一致。只改一邊等於沒改。
+ *
+ * 每個顏色的對比度與用途說明寫在 globals.css 的檔頭（那份是主要文件）。
+ * 簡述：五色分區，每個首頁區塊輪一個主色，全部實測過 ≥ 4.5:1。
  */
 const config: Config = {
   content: [
@@ -17,6 +20,14 @@ const config: Config = {
         ink: { DEFAULT: "#1A1A1A", pure: "#000000", soft: "#2E2A1C" },
         muted: { DEFAULT: "#6B6357", light: "#9C9384" },
         brand: { DEFAULT: "#FFCE00", soft: "#FFE680", wash: "#FFF6D6" },
+
+        // 五色分區。每組的 wash 是同色系的極淺底，給卡片與次要區塊用。
+        // 註記的是「這個色當背景時，其上的文字該用什麼顏色」——不要用反。
+        flame: { DEFAULT: "#FF6B35", wash: "#FFF0EA" }, // 配 ink   6.14:1
+        rose: { DEFAULT: "#C4126B", wash: "#FDEAF3" }, //  配 white 5.76:1
+        violet: { DEFAULT: "#5B2D8E", wash: "#F1ECF8" }, // 配 white 9.50:1
+        teal: { DEFAULT: "#0F7A6B", wash: "#E7F4F1" }, //  配 white 5.23:1
+
         ok: "#15803D",
         hairline: "rgba(26,26,26,.11)",
       },

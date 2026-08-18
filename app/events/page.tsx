@@ -11,27 +11,33 @@ export default function EventsPage() {
       <Nav />
       <main className="lz-wrap py-12 md:py-16">
         <span className="lz-eyebrow">活動</span>
-        <h1 className="lz-h2 mt-4">新書發表會，敬請期待。</h1>
+        <h1 className="lz-h2 mt-4">場次確認後，會在這裡公布。</h1>
         <p className="lz-lead mt-4">
-          新書發表會的時間、地點與報名方式，將在確認後於此公布。
+          新書發表會的日期、地點與報名方式，確認之後會公布在這一頁。
         </p>
 
+        {/*
+          ⚠️ 這裡原本寫「線上報名功能已備妥…目前為提案展示版，尚未開放填寫」。
+          那是空話：沒有表單元件、沒有 API route。而且真正的原因不是「還在展示版」，
+          是**目前沒有已排定的場次**——沒有東西可以報名。照實寫。
+          資料表（event_signups）與 RLS 其實已經就緒，場次確定了再接表單。
+        */}
         <div className="lz-card mt-9 p-6">
-          <span className="lz-pill">尚未開放</span>
-          <h2 className="lz-h3 mt-3">線上報名功能已備妥</h2>
+          <span className="lz-pill">尚未排定</span>
+          <h2 className="lz-h3 mt-3">目前沒有可以報名的場次</h2>
           <p className="mt-2 text-[14.5px] leading-relaxed text-ink-soft">
-            正式版會在這裡提供發表會報名表單，報名資料直接進入後台名單並可匯出，
-            同時串接電子報訂閱，為第二階段的實體展覽先累積觀眾。
-            目前為提案展示版，尚未開放填寫。
+            等時間與地點確認之後，這裡會開放線上報名。
+            在那之前，你可以先跟數位李元貞聊聊她的婦運歷程與著作。
           </p>
         </div>
 
         <div className="mt-8 flex flex-wrap gap-3">
-          <Link href="/chat" className="lz-cta">
-            先去問問數位李元貞 →
+          <Link href="/live" className="lz-cta">
+            面對面問她 →
           </Link>
-          <Link href="/book" className="lz-cta-ghost">
-            看看著作
+          {/* 原本連 /book，但那個路由不存在——是站上兩個 404 之一 */}
+          <Link href="/chat?q=李元貞寫過哪些書？" className="lz-cta-ghost">
+            問她寫過哪些書
           </Link>
         </div>
       </main>

@@ -4,11 +4,11 @@
 
 export const site = {
   name: "李元貞 × AI 數位人",
-  title: "李元貞 × AI 數位人｜新書互動網站（提案展示版）",
+  title: "李元貞 × AI 數位人｜線上就能親口問她",
   description:
-    "一個線上就能和「數位李元貞」對話的新書網站——問婦女運動的歷史，問新書的故事。本站為提案展示版，內容由 AI 依公開資料生成。",
-  builder: "萊乾資訊 LaiQuan Tech",
-  builderUrl: "https://laiquan.co",
+    "台灣婦運先驅李元貞的 AI 數位人。問婦女運動的歷史，問她的生平與著作，她會用自己的聲音回答。內容由 AI 依她的著作與公開資料生成。",
+  /** 網站所有權。⚠️ 不是製作單位——製作單位不出現在站上。 */
+  owner: "財團法人婦女權益促進發展基金會",
 } as const;
 
 /** 數位人的顯示名稱——刻意永遠帶著「AI 模擬」，不做成可關閉的橫幅 */
@@ -18,11 +18,20 @@ export const AVATAR_NAME = "數位李元貞（AI 模擬）";
 export const ANSWER_DISCLAIMER =
   "本回答由 AI 依公開資料生成，非李元貞老師本人發言。";
 
-/** 頁首常駐標記 */
-export const DEMO_BADGE = "提案展示版";
-
-export const DEMO_NOTICE =
-  "本網站為萊乾資訊製作的提案展示版，尚未取得李元貞老師的肖像與內容授權，知識庫僅取自公開資料。";
+/**
+ * 每一頁頁尾都必須出現的揭露。不做成可關閉的橫幅。
+ *
+ * ⚠️ 這段話刻意從 `DEMO_NOTICE` 改名而來——改名不是為了好聽，是為了讓所有
+ * 引用點在**編譯期**就報錯。舊名的內容是「尚未取得肖像與內容授權」，
+ * 授權簽妥之後那句話變成假話，而漏改一處就是站上留著一句謊。
+ * 靠改值不改名的話，漏了也沒人會發現。
+ *
+ * ⚠️ 它同時被鏡射進 RAG 語料（content/knowledge/07-about-this-site.md）。
+ * 改這裡就要一起改那邊，然後跑 `npm run build:index` 與 `npm run ingest:supabase`，
+ * 否則訪客問到同一題時，AI 會照舊索引回答，當場否定網站自己。
+ */
+export const SITE_NOTICE =
+  "「數位李元貞」是 AI 分身，不是李元貞老師本人。肖像與聲音經老師書面授權使用，回答依其著作與公開資料生成，不代表她的立場。";
 
 /** 超出知識庫範圍時的婉拒文案（不呼叫 LLM，直接回這段） */
 export const OUT_OF_SCOPE_REPLY =
@@ -43,10 +52,10 @@ export const nav = [
   { href: "/about-ai", label: "關於這個 AI" },
 ] as const;
 
-export const footerLinks = [
-  { href: "/about-ai", label: "關於這個 AI" },
-  { href: "/privacy", label: "隱私權" },
-] as const;
+/**
+ * 只放 nav 沒有的。/about-ai 已經在 nav 裡，兩邊都列會讓頁尾出現兩次同一個連結。
+ */
+export const footerLinks = [{ href: "/privacy", label: "隱私權" }] as const;
 
 /**
  * /live（全螢幕、按住說話）的文案。

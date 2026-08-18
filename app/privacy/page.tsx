@@ -11,9 +11,9 @@ export const metadata: Metadata = { title: "隱私權說明｜李元貞 × AI �
  * 新增一條會離開瀏覽器的資料流，就要同步改這裡——語音頁（/live）
  * 帶進來的錄音與串流影像都是性質不同的新資料流，不能等到之後再補。
  *
- * 目前尚未列入、但 /live 對外之後**必須**補上的（見 docs/AVATAR-RUNBOOK.md
- * 護欄清單第 10 項）：LiveAvatar 會拿到回答文字，WebRTC 連線還會讓對方
- * 取得訪客 IP。那要跟肖像授權的文案一起改，屬於 P5。
+ * 已列入的資料流：提問文字→Gemini、錄音→Gemini、回答文字→ElevenLabs、
+ * 回答文字→LiveAvatar、WebRTC 直連→LiveAvatar 取得訪客 IP。
+ * ⚠️ 再加任何一條會離開瀏覽器的資料流，就要回來補這一頁。
  */
 const SECTIONS = [
   {
@@ -30,15 +30,15 @@ const SECTIONS = [
   },
   {
     h: "我們使用的第三方服務",
-    p: "對話生成與語音轉文字都使用 Google Gemini；本站部署於 Vercel。你的提問文字會傳送給 Google 以產生回答；使用語音提問時，錄下的音訊也會傳送給 Google 轉成文字。",
+    p: "對話生成與語音轉文字使用 Google Gemini；語音合成使用 ElevenLabs；即時影像串流使用 LiveAvatar；本站部署於 Vercel。你的提問文字會傳送給 Google 以產生回答，使用語音提問時，錄下的音訊也會傳送給 Google 轉成文字。回答文字會傳送給 ElevenLabs 合成語音、傳送給 LiveAvatar 生成對嘴影像；影像採 WebRTC 直連，連線過程中 LiveAvatar 會取得你的 IP 位址。",
   },
   {
     h: "Cookie",
     p: "本站不使用追蹤 Cookie，也沒有安裝廣告或分析追蹤碼。",
   },
   {
-    h: "這是展示版",
-    p: "本站為提案展示版，未來正式上線時，隱私權政策會依實際功能（電子報、活動報名等）重新調整並公告。",
+    h: "政策會隨功能調整",
+    p: "目前本站沒有登入、沒有電子報、沒有活動報名表單。未來開放這些功能時，隱私權政策會一併更新並公告。",
   },
 ];
 
@@ -60,7 +60,7 @@ export default function PrivacyPage() {
         </div>
 
         <p className="mt-10 text-[13.5px] text-muted">
-          有任何疑問，請聯絡本站製作單位 {site.builder}。
+          有任何疑問，請聯絡 {site.owner}。
         </p>
       </main>
       <Footer />

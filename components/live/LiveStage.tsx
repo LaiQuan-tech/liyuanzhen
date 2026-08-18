@@ -16,8 +16,7 @@ import { resolveProvider } from "@/lib/avatar";
 import {
   AVATAR_NAME,
   ANSWER_DISCLAIMER,
-  DEMO_BADGE,
-  DEMO_NOTICE,
+  SITE_NOTICE,
   GUARDED_REPLY,
   liveCopy,
 } from "@/content/site";
@@ -59,7 +58,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  *    body 是錯誤訊息不是答案。少了這道分界，她會用克隆的聲音唸出
  *    「請求格式錯誤。」（Sunny 展場版踩過並留下註解警告。）
  * 2. **一定要送 speakableAnswer 而不是 answer。** 理由見 lib/avatar/types.ts。
- * 3. **AVATAR_NAME、ANSWER_DISCLAIMER、DEMO_NOTICE、浮水印都要在畫面上。**
+ * 3. **AVATAR_NAME、ANSWER_DISCLAIMER、SITE_NOTICE、浮水印都要在畫面上。**
  *    Nav/Footer 是每頁自己掛的，這一頁沒有掛，所以必須自己放。
  *    一張佔滿螢幕、會說話的臉，正是最可能被錄下來轉傳的東西。
  */
@@ -266,10 +265,8 @@ export default function LiveStage() {
 
       {/* 頂部：身分標記。這一頁沒有 Nav，所以必須自己放。 */}
       <header className="absolute inset-x-0 top-0 z-10 flex items-center gap-3 bg-gradient-to-b from-ink/85 to-transparent px-4 pb-10 pt-4 sm:px-6">
+        {/* AVATAR_NAME 已經帶著「（AI 模擬）」，不需要第二個標記 */}
         <span className="font-display text-[15px] font-bold sm:text-[17px]">{AVATAR_NAME}</span>
-        <span className="rounded-full border border-white/35 px-2 py-[2px] text-[10px] font-bold tracking-wide">
-          {DEMO_BADGE}
-        </span>
         <Link
           href="/chat"
           className="ml-auto rounded-full border border-white/35 px-3 py-1 text-[12px] font-bold transition-colors hover:bg-white/10"
@@ -342,7 +339,7 @@ export default function LiveStage() {
 
           {/* Footer 也是每頁自己掛的，這一頁沒掛，所以揭露要自己放 */}
           <p className="max-w-2xl text-[10px] leading-snug text-white/35 sm:text-[11px]">
-            {DEMO_NOTICE}
+            {SITE_NOTICE}
           </p>
         </div>
       </div>

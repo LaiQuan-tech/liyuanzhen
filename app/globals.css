@@ -3,8 +3,27 @@
 @tailwind utilities;
 
 /*
- * 設計系統移植自提案簡報 liyuanzhen-pitch/index.html。
- * 變數名稱刻意與 deck 保持一致，方便兩邊對照。
+ * 設計系統。骨架（黑框 ＋ 零模糊硬偏移陰影）源自提案簡報，色彩則已經改版。
+ *
+ * ⚠️ 色票是**雙軌**的：這裡的 :root 與 tailwind.config.ts 各寫一份，
+ * 兩邊的值必須一致。只改一邊等於沒改——這是最容易發生、也最難察覺的錯。
+ *
+ * ── 五色分區 ────────────────────────────────────────────────
+ * 原本只有單一黃色，那是為了「不畫她的臉」而生的極簡設定。
+ * 現在主視覺是李元貞老師本人，配色要傳達「有能量、很正義」，
+ * 所以改成五色家族，每個首頁區塊輪一個主色：結構一致，只有顏色在跳。
+ *
+ * 🔴 每個顏色都**已實測對比度**，而且是在選色階段就算完的，不是事後補救：
+ *
+ *   火橙 #FF6B35  配 ink    6.14:1   Hero
+ *   桃紅 #C4126B  配 white  5.76:1   婦運歷程
+ *   紫   #5B2D8E  配 white  9.50:1   她說過的話
+ *   青綠 #0F7A6B  配 white  5.23:1   她是誰
+ *   黃   #FFCE00  配 ink   11.67:1   收尾
+ *
+ * ⚠️ 中間亮度是死區。原本想用的 #E5197F（較亮的桃紅）**黑字 3.96、白字 4.40，
+ * 兩邊都不及格**——所以壓深到 #C4126B 才配得了白字。
+ * 換色之前先算，不要挑好看的再來救。內文 4.5:1、大字 3:1。
  */
 :root {
   --bg: #fffbec;
@@ -18,6 +37,17 @@
   --yellow: #ffce00;
   --yellow-soft: #ffe680;
   --yellow-wash: #fff6d6;
+
+  /* 五色分區。註解在檔頭，含對比度。 */
+  --flame: #ff6b35;
+  --flame-wash: #fff0ea;
+  --rose: #c4126b;
+  --rose-wash: #fdeaf3;
+  --violet: #5b2d8e;
+  --violet-wash: #f1ecf8;
+  --teal: #0f7a6b;
+  --teal-wash: #e7f4f1;
+
   --ok: #15803d;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -217,6 +247,66 @@
     box-shadow: 3px 4px 0 rgba(26, 26, 26, 0.18);
   }
 
+  /* ── 時間軸 ─────────────────────────────── */
+  /*
+   * 現有積木裡沒有任何 grid helper、divider 或 rail，這個完全是無中生有。
+   * 用 Tailwind 的 before: 任意變體硬幹的話，每個 li 要掛十來個任意值類別，
+   * 而直線還得靠父層再處理尾端截斷——正是 component class 存在的理由。
+   *
+   * ⚠️ 直線畫在 li 的 border-left 上，**不是**畫在 ol 上。
+   * 畫在 ol 上就沒辦法只把最後一段的尾巴收掉，線會多一截垂在半空。
+   *
+   * ⚠️ 圓點用 ::before ＝ 純裝飾，讀屏不會唸到。不要改成真的元素。
+   */
+  .lz-timeline > li {
+    position: relative;
+    margin-left: 7px;
+    padding-left: 26px;
+    padding-bottom: 14px;
+    border-left: 2px solid var(--ink);
+  }
+  .lz-timeline > li::before {
+    content: "";
+    position: absolute;
+    left: -8px;
+    top: 22px;
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--ink);
+    border-radius: 999px;
+    background: var(--yellow);
+  }
+  .lz-timeline > li:last-child {
+    border-left-color: transparent;
+    padding-bottom: 0;
+  }
+  @media (min-width: 640px) {
+    .lz-timeline > li {
+      padding-left: 34px;
+    }
+    .lz-timeline > li::before {
+      left: -10px;
+      width: 17px;
+      height: 17px;
+    }
+  }
+
+  /* ── 可點卡片 ───────────────────────────── */
+  /*
+   * 首頁有四處可點卡片（時間軸、著作、語錄、AI 說明）。
+   * 原本各處寫 hover:-translate-y-1（純垂直位移），跟 lz-cta／lz-chip 的
+   * 「左上偏移 ＋ 陰影加深」不是同一套語言，四處各寫一次會慢慢走鐘。
+   */
+  .lz-card-link {
+    transition:
+      transform 0.22s var(--ease),
+      box-shadow 0.22s var(--ease);
+  }
+  .lz-card-link:hover {
+    transform: translate(-1px, -2px);
+    box-shadow: 6px 8px 0 rgba(26, 26, 26, 0.18);
+  }
+
   /* ── 捲動揭示 ───────────────────────────── */
   .lz-reveal {
     opacity: 0;
@@ -240,7 +330,11 @@
   }
   .lz-cta,
   .lz-cta-ghost,
-  .lz-chip {
+  .lz-chip,
+  .lz-card-link {
     transition: none;
+  }
+  .lz-card-link:hover {
+    transform: none;
   }
 }
