@@ -551,20 +551,82 @@ offset 12 與 36。那個假設對我們自己編的檔成立，對 ffmpeg 產�
 再加一道 Sunny 沒有的：`setPointerCapture`。手指按住後滑出按鈕範圍，
 `pointerup` 仍然收得到——少了它，使用者一邊講一邊手滑，麥克風就永遠關不掉。
 
-### 延遲：比 Sunny 慢，那是換 RAG 正確性付的價
+### 延遲：真連線實測（2026-08-19，dev 模式，真 Chrome）
 
-| 階段 | 實測 |
-|---|---|
-| STT（`gemini-3.5-flash` thinking=0） | ~1.0s |
-| `/api/chat`（RAG ＋ Gemini） | ~4.4s |
-| `/api/tts` 首位元組 | ~2.0s |
-| 合計（放開按鈕 → 她開口） | **待真連線量測** |
+從**放開按鈕**起算：
 
-4.4 秒那段是結構性的：driver 必須等整段答案才開口，因為 `answer-guard`
+| 階段 | 第 2 題（暖機） | 說明 |
+|---|---|---|
+| `/api/stt` 送出 | 21ms | |
+| **逐字稿上畫面** | **1840ms** | 整段等待裡最重要的回饋 |
+| `/api/chat` 首位元組 | 4125ms | |
+| 答案寫完 | 4307ms | |
+| `/api/tts` 送出 | 4436ms | 跟答案寫完只差 129ms，沒有死時間 |
+| **`/api/tts` 首位元組** | **6285ms** | 約等於她開口 |
+
+各支端點的分佈（三輪）：
+
+| 端點 | 範圍 | 備註 |
+|---|---|---|
+| `/api/stt` | 1.3–2.0s | 穩定，跟音訊長度無關 |
+| `/api/chat` | 2.6–5.8s | **隨答案長度與對話歷史成長** |
+| `/api/tts` 首位元組 | ~1.9s | |
+
+⚠️ **總延遲不是一個固定數字**，主要由 `/api/chat` 決定，而那隨答案長度變動。
+第 2 題（短答案）約 6.3 秒；第 3 題（長答案、第三輪帶歷史）量到
+**她第一次發出聲音是 9.0 秒**。對客戶講體感時要講範圍，不要講單一數字。
+
+`/api/chat` 那段是結構性的：driver 必須等整段答案才開口，因為 `answer-guard`
 會在結尾追加婉拒句。要壓它得動 `answer-guard` 的設計，不是調參數。
+下一個可談的槓桿是把 `lib/persona-prompt.ts` 第 8 條的「3 到 5 句」
+對語音場景收成 2 到 3 句——但那是產品決定，不是技術決定。
 
-不假裝它不存在，改用誠實的方式填空白：逐字稿一回來（約 1 秒）立刻打在
-字幕上證明她聽到了；錄音期間送 `startListening()`。
+不假裝延遲不存在，改用誠實的方式填空白：逐字稿一回來（1.8 秒）立刻打在
+字幕上證明她聽到了。
+
+### 怎麼在沒有人講話的情況下測完整條鏈路
+
+不用改任何 production 程式碼——在瀏覽器層把麥克風換掉就好：
+
+```js
+const ctx = new AudioContext();
+const buf = await ctx.decodeAudioData(await (await fetch("/dev/test-question.wav")).arrayBuffer());
+navigator.mediaDevices.getUserMedia = async () => {
+  const dest = ctx.createMediaStreamDestination();
+  const src = ctx.createBufferSource();
+  src.buffer = buf; src.connect(dest); src.start();
+  return dest.stream;
+};
+```
+
+問題音檔用 macOS 內建的中文語音現做：
+
+```bash
+say -v Meijia "婦女新知是怎麼開始的？" -o /tmp/q.aiff
+ffmpeg -i /tmp/q.aiff -ac 1 -ar 48000 -c:a pcm_s16le public/dev/test-question.wav
+```
+
+（`public/dev/` 已在 `.gitignore` 裡。）
+
+**要證明她真的發出聲音**，從遠端音軌接分析器量 RMS——
+⚠️ 用 `createMediaStreamSource(video.srcObject)`，**不要**用
+`createMediaElementSource(video)`：後者會把 `<video>` 的聲音改道，喇叭會沒聲音。
+實測峰值 0.4584、42% 的取樣有聲。
+
+### 🔴 實測抓到的 bug：`setPointerCapture` 會讓按鈕靜默失效
+
+`setPointerCapture(pointerId)` 在該 id 已經不是「作用中的指標」時會丟
+`NotFoundError`。它原本是 `onPointerDown` handler 的**第一行**——例外一丟，
+後面的 `press()` 整個不會執行。症狀是**按鈕完全沒反應，畫面上一點回饋都沒有，
+console 也沒有錯誤**。
+
+指標捕捉只是「手指滑出按鈕範圍仍收得到 `pointerup`」的優化，不是錄音的
+前提條件。已改成 try/catch 包起來，失敗就算了。
+
+> **紀律：一定要用真的 Chrome 驗。** 內建瀏覽器面板不解 WebRTC 影像
+> （軌是 `live`、`srcObject` 有值，但 `readyState` 0、零影格），
+> 而且會擋麥克風。真 Chrome 上實測 `readyState: 4`、1280×720、
+> `muted: false`、`paused: false`。
 
 ---
 

@@ -309,7 +309,18 @@ export default function LiveStage() {
             // setPointerCapture：手指按住之後滑出按鈕範圍，pointerup 仍然收得到——
             // 少了它，使用者一邊講一邊手滑，麥克風就永遠關不掉。
             onPointerDown={(event) => {
-              event.currentTarget.setPointerCapture(event.pointerId);
+              // ⚠️ setPointerCapture 會在 pointerId 已經不是「作用中的指標」時
+              // 丟 NotFoundError。它原本是這個 handler 的第一行，例外一丟，
+              // 下面的 press() 整個不會執行——按鈕靜默失效，畫面上一點反應都沒有，
+              // 也沒有任何錯誤訊息。實測時真的踩到。
+              //
+              // 指標捕捉只是「手指滑出按鈕範圍仍收得到 pointerup」的優化，
+              // 不是錄音的前提條件。它失敗就算了，不可以拖著錄音一起死。
+              try {
+                event.currentTarget.setPointerCapture(event.pointerId);
+              } catch {
+                // 沒捕捉到就沒捕捉到，pointerup 仍然會在按鈕上觸發
+              }
               void press();
             }}
             onPointerUp={() => void release()}
