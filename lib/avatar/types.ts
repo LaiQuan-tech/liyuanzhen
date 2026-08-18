@@ -36,6 +36,15 @@ export interface AvatarDriverHooks {
    * 網站要退化成「還能用的文字聊天」，而不是白畫面。
    */
   onFatal(error: Error): void;
+  /**
+   * 伺服器允許這個 session 活多久（秒）。metered driver 在拿到 token 之後回報。
+   *
+   * ⚠️ 存在的理由是不要有兩套數字。AvatarStage 原本自己寫死 5 分鐘硬上限，
+   * 但真正說了算的是伺服器的 max_session_duration（帳本預設 180 秒）。
+   * 客戶端的上限比伺服器長，症狀就是「她講到一半突然消失，畫面沒有任何解釋」——
+   * 文字聊天是短促的所以看不出來，全螢幕的多輪對話一定會撞到。
+   */
+  onSessionLimit?(seconds: number): void;
 }
 
 /**
@@ -88,8 +97,9 @@ export interface AvatarDriver {
 /**
  * 決定「真正要唸出來的是哪段字」。
  *
- * lib/answer-guard.ts 會**回收已經送出的文字**：命中封鎖清單時它停止輸出，
- * 然後路由在後面追加 GUARDED_REPLY。畫面上使用者看到的是被截斷的半句＋婉拒，
+ * lib/answer-guard.ts 命中封鎖清單時會**停止輸出剩餘文字**，然後路由在後面
+ * 追加 GUARDED_REPLY。⚠️ 注意它**收不回已經 flush 出去的字**（60 字滾動緩衝，
+ * 在那之前的都已經在瀏覽器裡了）。畫面上使用者看到的是被截斷的半句＋婉拒，
  * 但如果我們照著整段唸，就會把「系統事後判定為不該說」的那段唸出去。
  *
  * 今天那是合成音，還只是尷尬；換成老師本人的臉和聲音之後，

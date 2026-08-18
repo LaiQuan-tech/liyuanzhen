@@ -83,7 +83,7 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
         }
 
         // ⚠️ 一定要送 speakableAnswer 而不是 answer：answer-guard 命中封鎖清單時
-        //    會回收已送出的文字、在後面追加婉拒句。照著整段唸就會把系統認定
+        //    會停止輸出剩餘文字、在後面追加婉拒句。照著整段唸就會把系統認定
         //    不該說的那段用她的臉和聲音講出去。
         if (voiceOn) stageRef.current?.finish(speakableAnswer(answer, GUARDED_REPLY));
       } catch {

@@ -6,7 +6,12 @@ import type { AvatarState } from "@/lib/avatar/types";
 
 interface Props {
   state: AvatarState;
-  size: "sm" | "lg";
+  /**
+   * `sm` / `lg` 是圓形頭像（/chat 用）。
+   * `full` 是滿版舞台（/live 用）——不做圓形裁切、不畫名牌，
+   * 因為那一頁自己有一整套版面要放名字、字幕與按鈕。
+   */
+  size: "sm" | "lg" | "full";
   visible: boolean;
   /**
    * ⚠️ 刻意用一般 prop 傳 ref，**不要**改回 forwardRef ＋ `ref={...}`。
@@ -29,6 +34,41 @@ interface Props {
  * 遠高於文字泡泡**，而螢幕錄影不會把免責句一起帶走。所以標記必須燒在畫面裡。
  */
 export default function VideoAvatar({ state, size, visible, videoRef }: Props) {
+  /**
+   * 滿版模式。/live 的全螢幕舞台。
+   *
+   * ⚠️ 浮水印在這裡比圓形頭像模式**更**必要，不是更不必要：
+   * 一張佔滿螢幕、會說話的臉，正是最可能被錄下來轉傳的東西。
+   * 所以這裡用的是整條橫幅而不是角標。
+   */
+  if (size === "full") {
+    return (
+      <div
+        className="absolute inset-0 transition-opacity duration-700"
+        style={{ opacity: visible ? 1 : 0 }}
+        aria-hidden={!visible}
+      >
+        <video
+          ref={videoRef}
+          // 跟圓形模式同一組理由，見下方註解
+          muted
+          playsInline
+          autoPlay
+          className="h-full w-full object-cover"
+        />
+        {/*
+          ⚠️ top-16 不是隨手抓的：滿版模式的呼叫端（/live）在畫面最上方有一條
+          身分列，浮水印貼在 top-3 會被那條蓋掉——實測手機版就是這樣，
+          而「浮水印看不見」等於這道護欄不存在。要改上緣位置的話，
+          記得同時看一眼 components/live/LiveStage.tsx 的 header 高度。
+        */}
+        <span className="pointer-events-none absolute right-3 top-16 rounded-full bg-ink/80 px-3 py-1 text-[11px] font-bold tracking-wide text-white backdrop-blur-sm">
+          AI 生成影像
+        </span>
+      </div>
+    );
+  }
+
   const dim = size === "lg" ? 128 : 56;
 
   return (

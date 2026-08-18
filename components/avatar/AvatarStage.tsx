@@ -11,7 +11,7 @@ import {
 } from "react";
 import DigitalAvatar from "@/components/avatar/DigitalAvatar";
 import { createAvatarDriver, resolveProvider } from "@/lib/avatar";
-import type { AvatarDriver, AvatarState } from "@/lib/avatar";
+import type { AvatarDriver, AvatarProvider, AvatarState } from "@/lib/avatar";
 import { createIdleTimer } from "@/lib/idle-timer";
 
 /**
@@ -26,8 +26,14 @@ const VideoAvatar = dynamic(
 
 /** 多久沒互動就收掉串流。太短會在使用者讀答案時斷掉，太長就是在燒錢。 */
 const IDLE_MS = 75_000;
-/** 單次 session 硬上限。防的是「開著分頁去吃飯」這種沒有惡意的燒錢方式。 */
-const HARD_CAP_MS = 5 * 60_000;
+/**
+ * 單次 session 硬上限的**保底值**。防的是「開著分頁去吃飯」這種沒有惡意的燒錢方式。
+ *
+ * ⚠️ 真正說了算的是伺服器回的 max_session_duration（見 hooks.onSessionLimit）。
+ * 這個常數只在伺服器沒給值時才用得到。兩邊不一致的症狀是
+ * 「她講到一半突然消失，畫面沒有任何解釋」——多輪對話一定會撞到。
+ */
+const FALLBACK_CAP_MS = 5 * 60_000;
 
 export interface AvatarStageHandle {
   /** ⚠️ 必須在使用者手勢的呼叫堆疊裡呼叫。冪等。 */
@@ -35,18 +41,48 @@ export interface AvatarStageHandle {
   push(delta: string): void;
   finish(fullText: string): void;
   stop(): void;
+  /**
+   * 告訴閒置計時器「使用者還在」。
+   *
+   * push/finish 內部已經會呼叫，這支是給**不經過它們**的互動用的——
+   * /live 的按住說話就是：訪客講了 10 秒，期間一個字都沒送進來，
+   * 沒有這支的話閒置計時器會在他講話的時候把串流收掉。
+   */
+  reportActivity(): void;
 }
 
 interface Props {
   state: AvatarState;
-  size?: "sm" | "lg";
+  size?: "sm" | "lg" | "full";
   onSpeakingChange(speaking: boolean): void;
   /** 這個 driver 在這台裝置上發不發得出聲音——決定要不要顯示朗讀按鈕 */
   onAudioAvailableChange?(available: boolean): void;
+  /**
+   * 指定 driver，蓋過 NEXT_PUBLIC_AVATAR_PROVIDER。
+   *
+   * 存在的理由：/live 是為串流虛擬人設計的整頁體驗，沒有那張臉這一頁就沒有意義；
+   * 而 /chat 有文字版可用，維持環境變數決定即可。兩頁需求不同，
+   * 用一個全域環境變數綁在一起只會逼人二選一。
+   */
+  provider?: AvatarProvider;
+  /**
+   * 計費中的 session 被收掉了（閒置、切到背景、離開頁面、撞到硬上限）。
+   *
+   * /live 用它把對話狀態一起重設——串流沒了還留著上一輪的字幕，
+   * 畫面會停在一個訪客無法理解的中間態。
+   */
+  onTeardown?(): void;
 }
 
 const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
-  { state, size = "sm", onSpeakingChange, onAudioAvailableChange },
+  {
+    state,
+    size = "sm",
+    onSpeakingChange,
+    onAudioAvailableChange,
+    provider: providerOverride,
+    onTeardown,
+  },
   ref
 ) {
   const [videoReady, setVideoReady] = useState(false);
@@ -62,8 +98,14 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
   const availableCb = useRef(onAudioAvailableChange);
   availableCb.current = onAudioAvailableChange;
 
-  const [provider, setProvider] = useState(resolveProvider);
+  const [provider, setProvider] = useState(() => providerOverride ?? resolveProvider());
   const needsVideo = provider !== "monogram";
+
+  const teardownCb = useRef(onTeardown);
+  teardownCb.current = onTeardown;
+
+  /** 伺服器說這個 session 能活多久。null ＝ 還沒拿到 token，用保底值。 */
+  const sessionLimitRef = useRef<number | null>(null);
 
   /** 收掉會計費的 session，但保留 driver 物件（下次手勢可以重新 prepare） */
   const teardown = useCallback(async () => {
@@ -78,8 +120,11 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     const driver = driverRef.current;
     if (!driver?.metered) return;
     driverRef.current = null;
+    sessionLimitRef.current = null;
     await driver.destroy();
     speakingCb.current(false);
+    // 串流沒了還留著上一輪的字幕，畫面會停在訪客無法理解的中間態
+    teardownCb.current?.();
   }, []);
 
   // driver 生命週期。⚠️ 不在這裡 prepare()——那必須由使用者手勢觸發，
@@ -92,6 +137,11 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
         onSpeakingChange: (s) => {
           if (!cancelled) speakingCb.current(s);
         },
+        onSessionLimit: (seconds) => {
+          // 只記下來，武裝硬上限是 prepare() 的事——這個回呼會在
+          // fetchToken() 期間觸發，那時候計時器還沒開始
+          if (!cancelled) sessionLimitRef.current = seconds;
+        },
         onFatal: (error) => {
           if (cancelled) return;
           console.error("[avatar] driver 失效，降級為 monogram：", error);
@@ -102,7 +152,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
           setVideoReady(false);
           setProvider("monogram");
         },
-      });
+      }, providerOverride);
 
       if (cancelled) {
         void driver.destroy();
@@ -185,7 +235,13 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
         setVideoReady(true);
         idleRef.current = createIdleTimer(IDLE_MS, () => void teardown());
         idleRef.current.start();
-        capRef.current = setTimeout(() => void teardown(), HARD_CAP_MS);
+
+        // 伺服器說了算。⚠️ 提早 2 秒收手，讓我們自己乾淨地關掉 session，
+        // 而不是等對方把連線切斷——後者在畫面上是「突然斷掉」，
+        // 前者才有機會顯示「連線已結束，按住說話可以重新開始」。
+        const limit = sessionLimitRef.current;
+        const capMs = limit ? Math.max(5_000, limit * 1000 - 2_000) : FALLBACK_CAP_MS;
+        capRef.current = setTimeout(() => void teardown(), capMs);
       }
     })();
 
@@ -210,9 +266,31 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
         driverRef.current?.finish(fullText);
       },
       stop: () => driverRef.current?.stop(),
+      reportActivity: () => idleRef.current?.reportActivity(),
     }),
     [prepare]
   );
+
+  if (size === "full") {
+    // 滿版舞台。同樣是兩層交叉淡入，但底層是置中的「李」字標記而不是同尺寸的圖，
+    // 因為一張 128px 的圖放大到整個螢幕只會糊掉。
+    return (
+      <div className="absolute inset-0 overflow-hidden bg-ink">
+        <div
+          className="absolute inset-0 flex items-center justify-center transition-opacity duration-700"
+          style={{ opacity: videoReady ? 0 : 1 }}
+          aria-hidden={videoReady}
+        >
+          <DigitalAvatar state={state} size="lg" showLabel={false} />
+        </div>
+
+        {needsVideo && (
+          // videoRef 是一般 prop，不是 ref——理由寫在 VideoAvatar 的 props 註解裡
+          <VideoAvatar videoRef={videoRef} state={state} size="full" visible={videoReady} />
+        )}
+      </div>
+    );
+  }
 
   return (
     // 兩層疊在同一個 grid cell 上做交叉淡入：串流就緒前先看到「李」字標記，

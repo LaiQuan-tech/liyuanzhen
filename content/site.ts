@@ -37,7 +37,8 @@ export const GUARDED_REPLY =
  * 時間軸／金句／提問牆／關於李元貞完成後再加回來。
  */
 export const nav = [
-  { href: "/chat", label: "與數位人對話" },
+  { href: "/live", label: "面對面問她" },
+  { href: "/chat", label: "文字對話" },
   { href: "/events", label: "活動報名" },
   { href: "/about-ai", label: "關於這個 AI" },
 ] as const;
@@ -46,3 +47,41 @@ export const footerLinks = [
   { href: "/about-ai", label: "關於這個 AI" },
   { href: "/privacy", label: "隱私權" },
 ] as const;
+
+/**
+ * /live（全螢幕、按住說話）的文案。
+ *
+ * 沿用 Sunny 展場版已經在現場驗過的那一套講法——那些字是對著真的訪客
+ * 用過的，比重新想一套安全。
+ *
+ * ⚠️ 錯誤文案一律**不會**被唸出來，只顯示在字幕上。
+ * 理由：/api/chat 回 403 / 429 / 400 時 body 是錯誤訊息不是答案，
+ * 少了這道分界，她會用克隆的聲音唸出「請求格式錯誤。」
+ */
+export const liveCopy = {
+  /** 還沒開始，等訪客第一次按下去 */
+  ready: "按住下面的按鈕，直接問她",
+  talkIdle: "按住說話",
+  talkRecording: "放開送出",
+  connecting: "正在接通…",
+  transcribing: "聽你說…",
+  thinking: "正在查資料…",
+  speaking: "回答中",
+
+  micDenied: "沒有麥克風權限，無法用語音提問。你可以改用文字版。",
+  micUnavailable: "找不到可用的麥克風。你可以改用文字版。",
+  micUnsupported: "這個瀏覽器不支援語音輸入，建議用 Chrome，或改用文字版。",
+  offline: "網路暫時不穩，請稍候再試一次。",
+  notHeard: "抱歉，我沒有聽清楚，請再試一次。",
+  failed: "抱歉，我需要休息一下，請稍候再試一次。",
+
+  /**
+   * session 到期。⚠️ 這不是錯誤，是預期中的行為——
+   * 伺服器的 max_session_duration 到了就會收掉。要講得像正常流程，
+   * 不要讓訪客以為壞了。
+   */
+  sessionEnded: "這段連線結束了。按住說話就可以重新開始。",
+
+  /** 回文字版的出口。麥克風不能用時這是唯一的路。 */
+  fallbackLink: "改用文字版",
+} as const;

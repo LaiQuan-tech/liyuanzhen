@@ -189,6 +189,12 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
         `取得 avatar token 失敗（${response.status}${body.reason ? ` ${body.reason}` : ""}）`
       );
     }
+
+    // 把伺服器說的上限往上報。⚠️ 不要讓呼叫端自己猜一個數字——
+    // 猜大了她會在對話中途無預警消失，猜小了則是白白浪費已經付錢的時間。
+    if (typeof body.maxSessionSeconds === "number" && body.maxSessionSeconds > 0) {
+      hooks.onSessionLimit?.(body.maxSessionSeconds);
+    }
     return body.sessionToken;
   }
 
@@ -277,9 +283,9 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
 
     push() {
       // 等整段答案才開口，串流中的 delta 一律忽略。
-      // 理由不是省事，是 lib/answer-guard 會回收已經送出的文字——
-      // 逐句唸的話，被回收的那段已經用她的臉和聲音講出去了。
-      // 完整推論見 types.ts 的 speakableAnswer。
+      // 理由不是省事，是 lib/answer-guard 命中封鎖清單時會停止輸出並追加婉拒句，
+      // 而那個判定要等到後面才發生——逐句唸的話，被判定為不該說的那段
+      // 已經用她的臉和聲音講出去了。完整推論見 types.ts 的 speakableAnswer。
     },
 
     finish(fullText) {

@@ -18,9 +18,17 @@ export type { AvatarState };
 export default function DigitalAvatar({
   state,
   size = "lg",
+  showLabel = true,
 }: {
   state: AvatarState;
   size?: "sm" | "lg";
+  /**
+   * 名字與狀態字要不要一起畫。
+   *
+   * /live 的滿版舞台自己有一整條頂部列在放名字，這裡再畫一次就會重複。
+   * 預設 true，因為 /chat 與首頁都靠它。
+   */
+  showLabel?: boolean;
 }) {
   const dim = size === "lg" ? 128 : 56;
   const fontSize = size === "lg" ? 56 : 24;
@@ -89,16 +97,18 @@ export default function DigitalAvatar({
         </div>
       </div>
 
-      <div className="text-center">
-        <div className="font-display text-[15px] font-bold">{AVATAR_NAME}</div>
-        <div className="mt-0.5 text-[12px] text-muted">
-          {state === "thinking"
-            ? "正在查資料…"
-            : state === "speaking"
-              ? "回答中"
-              : "線上・可語音朗讀"}
+      {showLabel && (
+        <div className="text-center">
+          <div className="font-display text-[15px] font-bold">{AVATAR_NAME}</div>
+          <div className="mt-0.5 text-[12px] text-muted">
+            {state === "thinking"
+              ? "正在查資料…"
+              : state === "speaking"
+                ? "回答中"
+                : "線上・可語音朗讀"}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
