@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { createHash, randomUUID } from "node:crypto";
 import { checkAdmission, openSession, readLimits } from "@/lib/avatar-ledger";
-import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { clientIp, avatarTokenRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 20;
@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
   }
 
   const ip = clientIp(request.headers);
-  const verdict = rateLimit(ip);
+  const verdict = avatarTokenRateLimit(ip);
   if (!verdict.ok) {
     return json({ error: "請稍等一下再試。", reason: verdict.reason }, 429);
   }

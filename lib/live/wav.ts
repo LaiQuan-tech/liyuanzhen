@@ -148,3 +148,79 @@ export function wavDurationSeconds(byteLength: number, sampleRate = TARGET_SAMPL
   const dataBytes = Math.max(0, byteLength - WAV_HEADER_BYTES);
   return dataBytes / (sampleRate * BYTES_PER_SAMPLE);
 }
+
+export interface WavHeader {
+  sampleRate: number;
+  channels: number;
+  bitsPerSample: number;
+  dataBytes: number;
+  durationSeconds: number;
+}
+
+/**
+ * 解析並驗證 WAV 標頭。**伺服器端用**——不可以相信客戶端說了什麼。
+ *
+ * 回 null 代表這不是一個合法的 WAV。要在付錢給 Gemini **之前**擋掉，
+ * 否則隨便一個 POST 垃圾位元組的腳本都能燒我們的額度。
+ *
+ * ⚠️ 一定要**走訪區塊**去找 `fmt ` 與 `data`，不可以假設它們在 offset 12 與 36。
+ * 那個假設對我們自己編的檔案成立，對別人的不成立——ffmpeg 就會插進 LIST/INFO 區塊。
+ * 實際踩到的症狀：一個 40 秒的檔案被算成 0 秒，於是繞過了 30 秒上限。
+ * 時長上限是成本控制，能被「多加一個區塊」繞過就等於沒有。
+ *
+ * ⚠️ 時長要從標頭裡的取樣率算，不能假設是 16000。
+ * 藍牙麥克風可能給 8kHz（見 downsampleTo16k 的說明），
+ * 用錯的取樣率算時長，「30 秒上限」會變成實際 60 秒。
+ */
+export function parseWavHeader(bytes: Uint8Array): WavHeader | null {
+  if (bytes.length < WAV_HEADER_BYTES) return null;
+
+  const ascii = (offset: number) =>
+    String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+  if (ascii(0) !== "RIFF" || ascii(8) !== "WAVE") return null;
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  let channels = 0;
+  let sampleRate = 0;
+  let bitsPerSample = 0;
+  let dataBytes = -1;
+
+  // RIFF 區塊從 offset 12 開始：每塊是 4 bytes 名稱 ＋ 4 bytes 長度 ＋ 內容（補足偶數）
+  let offset = 12;
+  while (offset + 8 <= bytes.length) {
+    const id = ascii(offset);
+    const size = view.getUint32(offset + 4, true);
+    const body = offset + 8;
+
+    if (id === "fmt " && size >= 16 && body + 16 <= bytes.length) {
+      // 只收未壓縮 PCM
+      if (view.getUint16(body, true) !== 1) return null;
+      channels = view.getUint16(body + 2, true);
+      sampleRate = view.getUint32(body + 4, true);
+      bitsPerSample = view.getUint16(body + 14, true);
+    } else if (id === "data") {
+      // 宣告的長度可能超過實際內容（截斷的上傳），取較小值才不會高估時長
+      dataBytes = Math.max(0, Math.min(size, bytes.length - body));
+      break;
+    }
+
+    // 區塊長度是奇數時要補一個 padding byte。
+    // 少了這行，遇到奇數長度的區塊之後每一塊都會錯位。
+    const advance = size + (size % 2);
+    // 長度欄位可以被造假成 0 或極大值——沒有這道防護就是無窮迴圈或整數溢位
+    if (advance <= 0 || body + advance > bytes.length) break;
+    offset = body + advance;
+  }
+
+  if (channels < 1 || sampleRate < 1 || bitsPerSample < 8 || dataBytes < 0) return null;
+
+  const bytesPerSecond = sampleRate * channels * (bitsPerSample / 8);
+  return {
+    sampleRate,
+    channels,
+    bitsPerSample,
+    dataBytes,
+    durationSeconds: bytesPerSecond > 0 ? dataBytes / bytesPerSecond : 0,
+  };
+}

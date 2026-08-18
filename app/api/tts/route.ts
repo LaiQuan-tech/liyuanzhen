@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { synthesizeStream, hasTtsCredentials } from "@/lib/voice";
-import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { clientIp, ttsRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
     return json({ error: "語音服務未設定。", reason: "not_configured" }, 503);
   }
 
-  const verdict = rateLimit(clientIp(request.headers));
+  const verdict = ttsRateLimit(clientIp(request.headers));
   if (!verdict.ok) {
     return json({ error: "請稍等一下再試。", reason: verdict.reason }, 429);
   }
