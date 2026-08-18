@@ -32,7 +32,7 @@
   --ink: #1a1a1a;
   --ink-soft: #2e2a1c;
   --gray: #6b6357;
-  --gray2: #9c9384;
+  --gray2: #726b5f; /* 舊值 #9c9384 在白底只有 3.03:1，見 tailwind.config.ts 的說明 */
   --line: rgba(26, 26, 26, 0.11);
   --yellow: #ffce00;
   --yellow-soft: #ffe680;

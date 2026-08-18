@@ -17,11 +17,15 @@ export function deriveAvatarState(speaking: boolean, busy: boolean): AvatarState
 }
 
 /**
- * monogram  現況：圓形「李」字標記 ＋ 瀏覽器 TTS。零成本、無肖像疑慮，
- *           也是其他 driver 掛掉時的退路，所以永遠不會被移除。
+ * monogram  圓形「李」字標記 ＋ 瀏覽器 TTS。這是**備援**，不是主要呈現：
+ *           零成本、不連外，是其他 driver 掛掉時的退路，所以永遠不會被移除。
+ *           ⚠️ 它刻意長得不像人臉——備援畫面要讓人一眼看出串流沒接上，
+ *           理由寫在 components/avatar/DigitalAvatar.tsx 的檔頭。
  * mock      假時序、不發聲、不連外。用來把整個 UI（載入、淡入、閒置退場、
  *           失敗降級、浮水印）做完並測完，完全不需要任何帳號或額度。
- * heygen    真的即時串流虛擬人。Phase 2 才實作。
+ * heygen    真的即時串流虛擬人：老師的授權影像 ＋ 克隆聲音 ＋ 即時對嘴。
+ *           **已經實作並上線**，是站上的主要呈現（/live 直接指定它）。
+ *           實作在 lib/avatar/heygen.ts，走 api.liveavatar.com。
  */
 export type AvatarProvider = "monogram" | "mock" | "heygen";
 

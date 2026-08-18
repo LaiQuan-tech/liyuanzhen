@@ -23,7 +23,7 @@ const MOCK_POSTER =
  *
  * 存在的理由是把「需要 HeyGen 帳號才能做的事」和「不需要的事」切開。
  * 版面、載入交叉淡入、解除靜音手勢、閒置退場、onFatal 降級、浮水印——
- * 這些全部可以用 mock 做完並測完，一毛錢都不用花，也不用等老師拍片。
+ * 這些全部可以用 mock 做完並測完，一毛錢都不用花，也不佔用 LiveAvatar 的分鐘數。
  *
  * 它也是唯一能在 CI 裡跑的 driver。
  */
@@ -60,11 +60,13 @@ export function createMockDriver(hooks: AvatarDriverHooks): AvatarDriver {
       // 預設**刻意不放任何真人影像**——mock 就該長得像 mock，否則在開發過程中
       // 很容易把假畫面誤認成真的串流已經接通。
       //
-      // 但要看「真人照片套進這個版面長什麼樣」時（構圖、圓形裁切、浮水印位置），
+      // 但要看「一張真人照片套進這個版面長什麼樣」時（構圖、圓形裁切、浮水印位置），
       // 可以用 NEXT_PUBLIC_AVATAR_PREVIEW_IMAGE 指一張本機圖片。
-      // ⚠️ 那個變數只該出現在本機 .env.local，不要設進 Vercel：
-      //    參考圖多半是他人拍攝的既有照片，著作權不在我們手上（附錄 B），
-      //    而且站上的護欄文案目前還寫著「尚未取得肖像授權」。
+      // ⚠️ 那個變數只該出現在本機 .env.local，**不要設進 Vercel**。
+      //    現在手上已經有老師的授權素材，所以問題不再是著作權，而是誠實：
+      //    設上去之後線上就會出現一張「看起來像串流、其實是靜止圖」的畫面，
+      //    而 mock driver 根本不會說話。授權涵蓋的是正式的串流呈現，
+      //    不是讓一張靜照冒充活著的串流。
       if (video) {
         video.poster = process.env.NEXT_PUBLIC_AVATAR_PREVIEW_IMAGE || MOCK_POSTER;
       }

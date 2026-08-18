@@ -18,7 +18,12 @@ const config: Config = {
       colors: {
         paper: { DEFAULT: "#FFFBEC", alt: "#FFFFFF", tint: "#FFF6D6" },
         ink: { DEFAULT: "#1A1A1A", pure: "#000000", soft: "#2E2A1C" },
-        muted: { DEFAULT: "#6B6357", light: "#9C9384" },
+        // ⚠️ light 從 #9C9384 改成 #726B5F。舊值在白底上只有 3.03:1，
+        // 而它被拿來寫 ANSWER_DISCLAIMER（法律／倫理上必須存在的免責句）
+        // 與時間軸的補充說明——**必須存在的字看不清楚，等於沒有**。
+        // 新值在白、紙、以及五個 wash 底色上最差 4.54:1，全部通過。
+        // 這是實測抓到的，不是看出來的：光看設計稿不會發現。
+        muted: { DEFAULT: "#6B6357", light: "#726B5F" },
         brand: { DEFAULT: "#FFCE00", soft: "#FFE680", wash: "#FFF6D6" },
 
         // 五色分區。每組的 wash 是同色系的極淺底，給卡片與次要區塊用。

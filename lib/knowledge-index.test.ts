@@ -56,14 +56,16 @@ describe("語料與索引必須同步", () => {
     // ⚠️ 索引裡的 source 是 frontmatter 的 `source:` 值（例如「本網站說明」），
     // **不是檔名**，而且不是一對一——07 與 08 兩篇共用「本網站說明」。
     // 所以要比對的是「frontmatter 宣告的來源集合」對「索引裡的來源集合」。
-    const declared = new Set(
+    const declared: Set<string> = new Set(
       readdirSync(KNOWLEDGE_DIR)
         .filter((f) => f.endsWith(".md"))
         .map((f) => readFileSync(join(KNOWLEDGE_DIR, f), "utf-8").match(/^source:\s*(.+)$/m)?.[1].trim())
         .filter(Boolean) as string[]
     );
     const indexed = new Set(index.entries.map((e) => e.source));
-    for (const source of declared) {
+    // ⚠️ 不要寫成 for...of Set——展開／迭代 Set 需要 downlevelIteration，
+    // tsconfig 沒開，會是 TS2802（而且只在 tsc 才報，vitest 照跑）
+    for (const source of Array.from(declared)) {
       expect(indexed.has(source), `語料宣告了來源「${source}」，索引裡卻找不到`).toBe(true);
     }
   });
