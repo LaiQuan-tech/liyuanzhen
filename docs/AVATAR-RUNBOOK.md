@@ -428,11 +428,143 @@ LiveAvatar 兩條路都有，看起來只差「素材好不好取得」，實際
 
 ### 4-4　客戶端退場　✅ 已完成
 
-閒置 75 秒、切到背景、離開頁面、單次 session 硬上限 5 分鐘——都已經實作並在
-瀏覽器實測過。**分頁被切到背景還在燒串流，是網站跟展場最大的成本差異。**
+閒置 75 秒、切到背景、離開頁面、單次 session 硬上限——都已經實作並在瀏覽器實測過。
+**分頁被切到背景還在燒串流，是網站跟展場最大的成本差異。**
+
+⚠️ 硬上限**不是**客戶端自己訂的數字。原本寫死 5 分鐘，但帳本的
+`AVATAR_MAX_SESSION_SECONDS` 預設 180 秒——客戶端比伺服器寬鬆，症狀是
+**她講到一半突然消失，畫面沒有任何解釋**。文字聊天是短促的所以看不出來，
+`/live` 的多輪對話一定會撞到。現在改成 `/api/avatar-token` 回 `maxSessionSeconds`
+→ `heygen.ts` 經 `hooks.onSessionLimit` 往上報 → `AvatarStage` 據此武裝，
+並提早 2 秒自己收手，才有機會顯示「這段連線結束了，按住說話可以重新開始」。
 
 > 階段 4 完成判準：`npm run build` 過（這就是 SSR 測試本身），
 > 且在 `/chat` 上實際跟老師的分身對話成功。
+
+---
+
+## 階段 4.5：語音輸入與 `/live`（2026-08-19 完成）
+
+客戶要的不是文字聊天框加小頭像，是「一張大臉、按住說話、她直接回答」
+（參照 Sunny 展場 kiosk）。缺的只有**語音輸入**與**全螢幕版面**，
+`/api/chat`、`/api/tts`、`/api/avatar-token`、`heygen.ts` 一行都不用改。
+
+### 為什麼不用 SDK 內建的 push-to-talk
+
+`@heygen/liveavatar-web-sdk@0.0.18` 有現成的 `VoiceChat` 與
+`SessionInteractivityMode.PUSH_TO_TALK`。**不能用**，理由在 SDK 原始碼裡：
+
+- `VoiceChat.startPushToTalk()` 送出 `user.start_push_to_talk` 後
+  **會等伺服器回 `user.push_to_talk_started`**（`initEventPromise`）。
+  那個 ack 來自 agent pipeline ＝ FULL 模式 ＋ `avatar_persona`。
+- `repeatAudio()` 明確要求 `_sessionEventSocket`，那是 LITE 專屬的 WebSocket。
+  原始碼裡的錯誤訊息就是「Please check you're using a supported mode」。
+
+**兩者互斥。** 用內建 PTT ＝ 麥克風送進 LiveKit 房間，由他們的 agent 做
+STT ＋ 生成 ＋ 發聲，等於 RAG、`answer-guard`、語料雜湊守門、ElevenLabs
+克隆聲全部作廢。對一位**在世的**人物，讓通用模型代她講話，
+就是用她的臉和聲音散布假話。
+
+但 SDK 有一個東西任何模式都能用、而這頁該用：
+**`session.startListening()` / `stopListening()`** 是純視覺指令，
+讓她在訪客講話時擺出聆聽的姿態。（型別有，實際行為在 LITE 下尚未驗證。）
+
+### 🔴 為什麼不用 MediaRecorder
+
+**Gemini 接受的音訊格式是 wav / mp3 / aiff / aac / ogg / flac——沒有 webm。**
+而 `MediaRecorder` 在 Chrome 只吐 `audio/webm;codecs=opus`、Safari 吐 `audio/mp4`。
+照 Sunny 那樣把 blob 原封不動上傳，第一次測試就會死。
+
+改走 Web Audio 自己編 WAV（`lib/live/wav.ts`）：
+`getUserMedia → AudioContext → AudioWorklet → Float32 → 降取樣 16kHz →
+Int16 → 44 byte RIFF 標頭`。好處是沒有容器相容性問題，
+而且降取樣、Int16 轉換、標頭全是純函式——這個 repo 沒有 jsdom，
+把邏輯留在純函式裡是唯一驗得到的路。
+
+### STT 的模型與參數是量出來的，不要隨手改
+
+實測（`npm run verify:stt`，用她本人 84 秒語音的 5 秒片段）：
+
+| 設定 | 延遲 | 思考 token | 逐字稿 |
+|---|---|---|---|
+| `gemini-flash-latest` | 3442ms | 620 | 性平會 ✓ |
+| `gemini-3.5-flash` 預設 | 3143ms | 467 | 性平會 ✓ |
+| `gemini-3.5-flash` ＋ `thinkingBudget:0` | **942ms** | **0** | 新平會 ✗ |
+| ＋ 專有名詞提示 ＋ 溫度 0 | **~1000ms** | **0** | **性平會 ✓** |
+| `gemini-flash-lite-latest` | 3530ms | 274 | 「新 聞 會…部 長」✗✗ |
+
+三個結論：
+
+1. **`gemini-flash-latest` 不吃 `thinkingBudget: 0`**（設了還是花 400 個思考
+   token），`gemini-3.5-flash` 吃。轉錄不需要推理，思考純粹是延遲。
+2. **`flash-lite` 不能用**——快但逐字稿是壞的，字會被拆成一個一個。
+3. **專有名詞提示不是裝飾，是準確度的關鍵**（`content/stt-vocabulary.ts`）。
+   逐字稿把「性平會」聽成「新平會」，embedding 就不同，檢索就落空，
+   訪客看到的是她聽不懂人話。語料改版時記得回頭看一眼那份清單。
+
+### 限流：這是最可能在客戶面前爆掉的地方
+
+原本三支端點**共用同一個 IP bucket**，20/分鐘。一輪語音要打
+`/api/stt` ＋ `/api/chat` ＋ `/api/tts` ＝ 每問一句扣 3 格，
+20 格實際上只剩**每分鐘 6 個問題**，而且提案現場整個會議室共用一個 NAT IP。
+示範到一半當眾被自己的限流擋下來。
+
+改成 `createRateLimiter()`，每支端點一個桶；全站每日總量維持共用
+（那是花費天花板，本來就該跨端點算）。⚠️ `RATE_LIMIT_GLOBAL_PER_DAY`
+的單位是**請求**不是問題，4000 約等於 1300 輪語音對話。
+
+### `/api/stt` 的驗證順序：便宜的先做
+
+`來源 → 限流 → Content-Length → 實際長度 → 解 WAV 標頭 → 才呼叫 Gemini`
+
+接受任意二進位上傳的端點特別容易被當沙包。「先讀完再檢查」等於
+讓對方決定我們配置多少記憶體。
+
+⚠️ 解標頭時**一定要走訪區塊**去找 `fmt ` 與 `data`，不可以假設它們在
+offset 12 與 36。那個假設對我們自己編的檔成立，對 ffmpeg 產的不成立
+（中間會插 LIST 區塊）。實際踩到的症狀：一個 40 秒的檔案被算成 0 秒，
+**繞過了 30 秒上限**——而時長上限就是成本控制，能被「多加一個區塊」
+繞過等於沒有。
+
+### 全螢幕會把護欄擠掉
+
+`Nav` / `Footer` 是每頁自己掛的，不是 layout 強制。`/live` 沒有掛，
+所以 `AVATAR_NAME`、`DEMO_BADGE`、`ANSWER_DISCLAIMER`、`DEMO_NOTICE`
+必須由 `LiveStage` 自己放回畫面上。
+
+⚠️ 浮水印在這裡比圓形頭像模式**更**必要：一張佔滿螢幕、會說話的臉，
+正是最可能被錄下來轉傳的東西。手機版實測抓到浮水印被頂部列蓋住——
+**看不見的浮水印等於這道護欄不存在**，所以 `VideoAvatar` 的 full 變體
+用 `top-16` 而不是 `top-3`。
+
+### 三個從 Sunny 抄過來的競態防護
+
+都是他們實際踩到才補的（commit `9a41fee`），不要因為「看起來多餘」就刪：
+
+- **`abortPending`** — 使用者點超快，`pointerup` 在 `getUserMedia` 還沒
+  resolve 就到了。沒有這道，稍後拿到的 stream 會變成孤兒：**麥克風一直開著**，
+  而畫面上看起來一切正常
+- **`starting` in-flight guard** — 不可以開出第二條音軌
+- **明確 `getTracks().forEach(t => t.stop())`** — 只丟掉 MediaStream 的參照
+  不會關掉麥克風，錄音指示燈會一直亮
+
+再加一道 Sunny 沒有的：`setPointerCapture`。手指按住後滑出按鈕範圍，
+`pointerup` 仍然收得到——少了它，使用者一邊講一邊手滑，麥克風就永遠關不掉。
+
+### 延遲：比 Sunny 慢，那是換 RAG 正確性付的價
+
+| 階段 | 實測 |
+|---|---|
+| STT（`gemini-3.5-flash` thinking=0） | ~1.0s |
+| `/api/chat`（RAG ＋ Gemini） | ~4.4s |
+| `/api/tts` 首位元組 | ~2.0s |
+| 合計（放開按鈕 → 她開口） | **待真連線量測** |
+
+4.4 秒那段是結構性的：driver 必須等整段答案才開口，因為 `answer-guard`
+會在結尾追加婉拒句。要壓它得動 `answer-guard` 的設計，不是調參數。
+
+不假裝它不存在，改用誠實的方式填空白：逐字稿一回來（約 1 秒）立刻打在
+字幕上證明她聽到了；錄音期間送 `startListening()`。
 
 ---
 
@@ -505,31 +637,34 @@ LiveAvatar 兩條路都有，看起來只差「素材好不好取得」，實際
 
 ## 環境變數總表
 
+⚠️ **真正的來源是 `.env.example`**，那份已經跟程式碼實際讀取的變數逐一對過
+（18 個，零缺漏）。這裡只留需要判斷的那幾個。
+
 ```bash
-# 已有
 GEMINI_API_KEY=              # ⚠️ 上線前換成專案專屬 key ＋ 雲端硬預算上限
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
-RETRIEVAL_PROVIDER=
-NEXT_PUBLIC_DEMO_MODE=
+                             #    對話生成與語音轉文字共用同一把
 
-# 已有（Phase 1 加的）
+AVATAR_ENABLED=false         # killswitch。預設關 ＝ 沒人能開始燒錢
+
+# ⚠️ 是 liveavatar.com 的 key，不是 heygen.com 的
+LIVEAVATAR_API_KEY=
+LIVEAVATAR_AVATAR_ID=
+
+# 她的克隆聲。⚠️ key 只要 TTS 權限
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=
+
 NEXT_PUBLIC_AVATAR_PROVIDER= # monogram（預設）| mock | heygen
-
-# 還沒有——LiveAvatar（⚠️ 是 liveavatar.com 的 key，不是 heygen.com 的）
-LIVEAVATAR_API_KEY=          # 階段 0-2，app.liveavatar.com → developers
-LIVEAVATAR_AVATAR_ID=        # 階段 3-1，要等老師拍完 ＋ 24 小時
-LIVEAVATAR_VOICE_ID=         # 建 avatar 時自動生成的她的聲音克隆（FULL mode 用）
-AVATAR_ENABLED=              # killswitch，出事時手動關
-
-# 還沒有——Azure　🔴 全部暫停，見階段 0-1
-# AZURE_SPEECH_KEY=
-# AZURE_SPEECH_REGION=
-# AZURE_VOICE_PROFILE_ID=
+                             # ⚠️ /live 不看它（一定要那張臉），
+                             #    唯一例外是設成 mock 時會跟著用 mock
 ```
 
 ⚠️ 舊名 `HEYGEN_API_KEY` 已改為 `LIVEAVATAR_API_KEY`——兩者是**不同的帳號、
 不同的 key、不同的計費池**，混用會 401。
+
+⚠️ `LIVEAVATAR_VOICE_ID` 已經**不需要**了。那是 FULL mode 的 `avatar_persona`
+在用的；我們走 LITE ＋ 自己的 ElevenLabs 克隆聲，聲音由 `ELEVENLABS_VOICE_ID`
+決定。程式碼裡沒有任何地方讀 `LIVEAVATAR_VOICE_ID`。
 
 ---
 
