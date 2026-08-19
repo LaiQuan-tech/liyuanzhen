@@ -72,6 +72,11 @@ interface Props {
    * 畫面會停在一個訪客無法理解的中間態。
    */
   onTeardown?(): void;
+  /**
+   * 影像還在、但這一段話沒有聲音（多半是 /api/tts 失敗）。
+   * ⚠️ 沒有人接這個回呼的話，訪客得到的就是完全沉默 ＋ 零解釋。
+   */
+  onSpeechFailed?(): void;
 }
 
 const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
@@ -82,6 +87,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     onAudioAvailableChange,
     provider: providerOverride,
     onTeardown,
+    onSpeechFailed,
   },
   ref
 ) {
@@ -103,6 +109,8 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
 
   const teardownCb = useRef(onTeardown);
   teardownCb.current = onTeardown;
+  const speechFailedCb = useRef(onSpeechFailed);
+  speechFailedCb.current = onSpeechFailed;
 
   /** 伺服器說這個 session 能活多久。null ＝ 還沒拿到 token，用保底值。 */
   const sessionLimitRef = useRef<number | null>(null);
@@ -136,6 +144,9 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
       const driver = await createAvatarDriver({
         onSpeakingChange: (s) => {
           if (!cancelled) speakingCb.current(s);
+        },
+        onSpeechFailed: () => {
+          if (!cancelled) speechFailedCb.current?.();
         },
         onSessionLimit: (seconds) => {
           // 只記下來，武裝硬上限是 prepare() 的事——這個回呼會在

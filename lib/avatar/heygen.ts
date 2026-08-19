@@ -42,6 +42,11 @@ const TTS_ENDPOINT = "/api/tts";
  */
 const SPEAK_FALLBACK_GRACE_MS = 2_000;
 
+/** TTS 最多送幾次。見 fetchTtsStream 的說明。 */
+const TTS_ATTEMPTS = 3;
+/** 重試間隔，會乘上第幾次（400ms、800ms）。 */
+const TTS_RETRY_MS = 400;
+
 /**
  * 合成期間的保險上限。這條只在「提前報說話中」到「算出真實音訊長度」之間有效，
  * 正常情況下兩秒內就會被真實長度的 timeout 取代。
@@ -130,16 +135,11 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
       hooks.onSpeakingChange(false);
     }, SPEAK_STARTUP_TIMEOUT_MS);
 
-    const response = await fetch(TTS_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!response.ok || !response.body) throw new Error(`TTS ${response.status}`);
+    const stream = await fetchTtsStream(text);
 
     // 邊收邊送。每收滿約一秒就丟一塊進播放緩衝，她在講第一塊時後面的還在傳——
     // 這是把「送出問題到她開口」從 12.9 秒壓下來的關鍵，不要改回等整包。
-    const reader = response.body.getReader();
+    const reader = stream.getReader();
     let pending = new Uint8Array(0);
     let totalBytes = 0;
 
@@ -196,6 +196,42 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
    */
 
   /**
+   * 取 TTS 串流，失敗會重試。
+   *
+   * ⚠️ 加重試不是保守起見，是實測需要：正式站上 `/api/tts` 出現過 503，
+   * 而 503 在這支路由只可能來自平台層（我們自己的 not_configured 分支不會忽然成立，
+   * 同一分鐘用 curl 與瀏覽器打都是 200）。那種一次性失敗以前會直接讓整段回答變成無聲。
+   *
+   * ⚠️ 4xx **不重試**——文字太長、格式不對這種錯，送幾次都一樣。
+   * 只有 429 例外，那是「太快了」，等一下就好。
+   */
+  async function fetchTtsStream(text: string): Promise<ReadableStream<Uint8Array>> {
+    let last = "";
+    for (let attempt = 1; attempt <= TTS_ATTEMPTS; attempt++) {
+      let response: Response | null = null;
+      try {
+        response = await fetch(TTS_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+      } catch (error) {
+        last = `連線失敗：${error instanceof Error ? error.message : String(error)}`;
+      }
+
+      if (response) {
+        if (response.ok && response.body) return response.body;
+        last = `TTS ${response.status}`;
+        if (response.status >= 400 && response.status < 500 && response.status !== 429) break;
+      }
+
+      if (dead || attempt === TTS_ATTEMPTS) break;
+      await new Promise((resolve) => setTimeout(resolve, TTS_RETRY_MS * attempt));
+    }
+    throw new Error(last || "TTS 失敗");
+  }
+
+  /**
    * 真正發聲的那一段。finish() 與 prepare() 的補說都走這裡，
    * 兩條路必須完全一樣——否則排隊補說的那一則會少掉 interrupt 或少掉降級。
    */
@@ -209,8 +245,22 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
     // 用她的克隆聲音。失敗時退回 HeyGen 內建語音，寧可聲音不像，
     // 也不要整個回答變成無聲——文字使用者已經看到了。
     speakWithClonedVoice(active, text).catch((error) => {
-      console.error("[avatar] 克隆語音失敗，改用內建語音：", error);
-      if (!dead && session) session.repeat(text);
+      console.error("[avatar] 克隆語音失敗：", error);
+      if (dead) return;
+
+      // ⚠️ 一定要自己把「回答中」收掉。speakWithClonedVoice 一開頭就報了 true，
+      // 靠那條 20 秒的保險 timeout 收，畫面會無聲地寫著「回答中」整整 20 秒。
+      clearSpeakingFallback();
+      hooks.onSpeakingChange(false);
+
+      // ⚠️ `repeat()` 只在非 LITE 模式有用。LITE 下指令送得出去、聲音不會出來
+      // （實測：console 印出 sending repeat command event，聲軌峰值 0.0001）。
+      // 所以不要在這裡假裝有退路——明講失敗，讓畫面去告訴訪客。
+      if (session && session.mode !== "LITE") {
+        session.repeat(text);
+        return;
+      }
+      hooks.onSpeechFailed?.();
     });
   }
 

@@ -49,6 +49,18 @@ export interface AvatarDriverHooks {
    * 文字聊天是短促的所以看不出來，全螢幕的多輪對話一定會撞到。
    */
   onSessionLimit?(seconds: number): void;
+  /**
+   * 影像還活著、但這一段話發不出聲音。
+   *
+   * ⚠️ 跟 `onFatal` 要分開：onFatal 會整個降級回 monogram，
+   * 但語音失敗時那張臉還在、下一題也可能就正常了，降級是過度反應。
+   *
+   * ⚠️ 這個回呼**必須**有人接。LITE 模式沒有 `repeat` 的實作——
+   * 指令送得出去，聲音不會出來（實測她的聲軌峰值 0.0001）。
+   * 沒有它，TTS 一失敗訪客看到的就是「按了、講了、她不理我」，
+   * 而且畫面上沒有任何線索。那正是使用者連續回報的症狀。
+   */
+  onSpeechFailed?(): void;
 }
 
 /**

@@ -212,3 +212,119 @@ describe("連線期間送到的答案（heygen driver，假 SDK）", () => {
     await driver.destroy();
   });
 });
+
+/**
+ * TTS 失敗的處理。
+ *
+ * ⚠️ 這一段是使用者第四次回報「沒反應」之後補的。正式站上 `/api/tts` 出現過 503
+ * （同一分鐘用 curl 與瀏覽器直接打都是 200，所以是一次性的平台層失敗），
+ * 而當時的程式碼把它吞掉：console 印一行、呼叫 `session.repeat()` 當退路。
+ * 實測 `repeat()` 在 LITE 模式是空包彈——指令送得出去，她的聲軌峰值 0.0001，
+ * 畫面上也沒有任何說明。訪客得到的就是完全沉默。
+ *
+ * 所以要守兩件事：一次性失敗要重試救回來；真的救不回來要明講。
+ */
+describe("TTS 失敗（heygen driver，假 SDK）", () => {
+  afterEach(() => {
+    vi.doUnmock("@heygen/liveavatar-web-sdk");
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+
+  /** 建一個已經接通的假 heygen driver，並依 `ttsStatuses` 依序回應 /api/tts */
+  async function connected(ttsStatuses: number[]) {
+    const calls: string[] = [];
+    const listeners = new Map<string, () => void>();
+    class FakeSession {
+      readonly mode = "LITE";
+      on(e: string, cb: () => void) { listeners.set(e, cb); }
+      once(e: string, cb: () => void) { listeners.set(e, cb); }
+      async start() { listeners.get("session_stream_ready")?.(); }
+      attach() {}
+      interrupt() { calls.push("interrupt"); }
+      repeat(t: string) { calls.push("repeat:" + t); }
+      repeatAudio() { calls.push("repeatAudio"); }
+      async stop() {}
+    }
+    vi.resetModules();
+    vi.doMock("@heygen/liveavatar-web-sdk", () => ({
+      LiveAvatarSession: FakeSession,
+      SessionEvent: { SESSION_STREAM_READY: "session_stream_ready", SESSION_DISCONNECTED: "session_disconnected" },
+      AgentEventsEnum: { AVATAR_SPEAK_STARTED: "avatar_speak_started", AVATAR_SPEAK_ENDED: "avatar_speak_ended" },
+    }));
+
+    const ttsHits: number[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (String(url).includes("/api/avatar-token")) {
+        return new Response(JSON.stringify({ sessionToken: "t", maxSessionSeconds: 180 }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (String(url).includes("/api/tts")) {
+        const status = ttsStatuses[ttsHits.length] ?? ttsStatuses[ttsStatuses.length - 1];
+        ttsHits.push(status);
+        if (status !== 200) return new Response(JSON.stringify({ error: "x" }), { status });
+        return new Response(
+          new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array(4096)); c.close(); } }),
+          { status: 200 }
+        );
+      }
+      throw new Error("沒有預期到的請求：" + url);
+    });
+
+    const speaking: boolean[] = [];
+    const fatal: Error[] = [];
+    let speechFailed = 0;
+    const { createHeygenDriver } = await import("./heygen");
+    const driver = createHeygenDriver({
+      onSpeakingChange: (s) => speaking.push(s),
+      onFatal: (e) => fatal.push(e),
+      onSpeechFailed: () => { speechFailed += 1; },
+    });
+    await driver.prepare({} as unknown as HTMLVideoElement);
+    return { driver, calls, speaking, fatal, ttsHits, failed: () => speechFailed };
+  }
+
+  const settle = () => new Promise((r) => setTimeout(r, 2200));
+
+  it("🔴 一次性的 503 要重試救回來，不可以讓整段回答變成無聲", async () => {
+    const c = await connected([503, 503, 200]);
+    c.driver.finish("婦女新知是 1982 年 2 月創刊的。");
+    await settle();
+
+    expect(c.ttsHits).toEqual([503, 503, 200]);
+    expect(c.calls).toContain("repeatAudio"); // 第三次成功，她講出來了
+    expect(c.failed()).toBe(0);
+    expect(c.fatal).toEqual([]);
+    await c.driver.destroy();
+  });
+
+  it("🔴 真的救不回來要明講——LITE 的 repeat() 是空包彈，不可以假裝有退路", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await connected([503]);
+    c.driver.finish("這一段發不出聲音");
+    await settle();
+
+    expect(c.ttsHits).toHaveLength(3); // 三次都試過了
+    expect(c.calls).not.toContain("repeatAudio");
+    expect(c.calls.some((x) => x.startsWith("repeat:"))).toBe(false); // LITE 不走這條假退路
+    expect(c.failed()).toBe(1); // 有往上報，畫面才有東西可以顯示
+    // ⚠️ 一定要自己把「回答中」收掉，不然畫面會無聲地寫著「回答中」20 秒
+    expect(c.speaking.at(-1)).toBe(false);
+    expect(c.fatal).toEqual([]); // 聲音壞掉不等於整個 driver 死掉，不可以降級
+    spy.mockRestore();
+    await c.driver.destroy();
+  });
+
+  it("4xx 不重試——文字太長送幾次都一樣，白白多等兩秒", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await connected([400]);
+    c.driver.finish("格式不對的請求");
+    await settle();
+
+    expect(c.ttsHits).toEqual([400]);
+    expect(c.failed()).toBe(1);
+    spy.mockRestore();
+    await c.driver.destroy();
+  });
+});

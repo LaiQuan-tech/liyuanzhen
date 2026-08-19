@@ -266,6 +266,16 @@ export default function LiveStage() {
     }
   }, [speaking, state]);
 
+  /**
+   * 影像還在、聲音沒出來。
+   *
+   * ⚠️ 這不是「這一輪失敗」——答案已經在畫面上了，所以文案與版位都要跟 failed 分開，
+   * 提示要出現在答案**底下**而不是取代它（見下面 notice 的排版）。
+   */
+  const handleSpeechFailed = useCallback(() => {
+    setNotice(liveCopy.voiceFailed);
+  }, []);
+
   /** 串流被收掉了（閒置、切到背景、撞到伺服器上限）*/
   const handleTeardown = useCallback(() => {
     if (!startedRef.current) return;
@@ -293,6 +303,7 @@ export default function LiveStage() {
         provider={LIVE_PROVIDER}
         onSpeakingChange={setSpeaking}
         onTeardown={handleTeardown}
+        onSpeechFailed={handleSpeechFailed}
       />
 
       {/* 頂部：身分標記。這一頁沒有 Nav，所以必須自己放。 */}
@@ -316,10 +327,12 @@ export default function LiveStage() {
 
           {/* min-h 讓字幕出現／消失時按鈕不會跳動 */}
           <div className="flex min-h-[3.5rem] items-center justify-center sm:min-h-[4rem]">
-            {notice ? (
-              <p className="text-[15px] text-brand-soft sm:text-[17px]">{notice}</p>
-            ) : answer ? (
+            {/* ⚠️ 答案優先於提示。反過來的話，「聲音沒出來」這種提示會**蓋掉**
+                它正在說「在上面」的那段答案——訪客只剩一句沒有指涉對象的錯誤訊息。 */}
+            {answer ? (
               <p className="text-[17px] leading-relaxed sm:text-[20px]">{answer}</p>
+            ) : notice ? (
+              <p className="text-[15px] text-brand-soft sm:text-[17px]">{notice}</p>
             ) : (
               <p className="text-[15px] text-white/60 sm:text-[17px]">
                 {statusLine || liveCopy.ready}
@@ -330,6 +343,11 @@ export default function LiveStage() {
           {/* ⚠️ 護欄 3：這一句在 /chat 是逐則附加的，這裡沒有訊息泡泡，所以常駐。 */}
           {answer && (
             <p className="text-[11px] text-white/45 sm:text-[12px]">{ANSWER_DISCLAIMER}</p>
+          )}
+
+          {/* 答案與提示同時存在時，提示走小字掛在下面，不搶答案的位置 */}
+          {answer && notice && (
+            <p className="text-[12.5px] text-brand-soft sm:text-[13.5px]">{notice}</p>
           )}
 
           <button
