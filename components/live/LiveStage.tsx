@@ -280,9 +280,9 @@ export default function LiveStage() {
         ? liveCopy.thinking
         : state === "speaking"
           ? liveCopy.speaking
-          : state === "recording"
-            ? liveCopy.talkRecording
-            : "";
+          : // 錄音中刻意留白：按鈕本身已經寫著「放開送出」，
+            // 底下也有「錄音中，講完放開」，字幕再講一次只是重複。
+            "";
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-ink text-white">
