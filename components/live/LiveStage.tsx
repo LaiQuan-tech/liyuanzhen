@@ -103,8 +103,9 @@ export default function LiveStage() {
         // 按住不放撞到 30 秒上限。當成放開處理，不要無聲地丟掉他講的話。
         autoStopRef.current();
       },
-      // 即時音量。錄音期間讓按鈕跟著跳，使用者才知道麥克風真的有收到他。
-      (rms) => setLevel(rms)
+      // 即時音量。⚠️ 做峰值保持 ＋ 衰減，不要直接餵瞬時值：
+      // 人講話字與字之間本來就有停頓，瞬時值會掉到底噪，畫面就一直閃。
+      (rms) => setLevel((prev) => Math.max(rms, prev * 0.82))
     );
     recorderRef.current = recorder;
     return () => {
@@ -371,7 +372,9 @@ export default function LiveStage() {
                     // 沒有它，「麥克風壞掉」跟「房間很安靜」在畫面上一模一樣，
                     // 使用者講完發現沒反應時，完全無從判斷是誰的問題。
                     // 用 style 而不是 class：Tailwind 產不出連續變化的值。
-                    boxShadow: `0 0 0 ${Math.min(8 + level * 220, 42).toFixed(1)}px rgba(255,255,255,.20)`,
+                    // 校準自實測：安靜房間 0.007、正常說話 0.01~0.05。
+                    // 乘 220 的話說話只推到 10~19px，肉眼幾乎看不出在動。
+                    boxShadow: `0 0 0 ${Math.min(6 + level * 700, 44).toFixed(1)}px rgba(255,255,255,.22)`,
                     transition: "box-shadow 90ms linear",
                   }
                 : undefined
@@ -380,10 +383,17 @@ export default function LiveStage() {
             {recording ? liveCopy.talkRecording : liveCopy.talkIdle}
           </button>
 
-          {/* 錄音中才出現的收音狀態。文案講的是「有沒有收到」，不是音量數字。 */}
+          {/*
+            ⚠️ 這裡刻意**不**寫「還沒收到聲音，講大聲一點」那種判斷句。
+            實測底噪就有 0.007、而說話的瞬時值在字與字之間會掉回底噪，
+            任何絕對門檻都會在使用者正常講話時反覆喊「沒收到」——冤枉人又嚇人。
+
+            會跟著聲音脹縮的光圈本身就是「麥克風活著」的證據，比文字可靠。
+            真正沒收到（麥克風被靜音）會在放開之後由 SILENCE_RMS 抓到並明說。
+          */}
           {recording && (
-            <p className="text-[12.5px] text-white/70" aria-live="polite">
-              {level >= SILENCE_RMS ? "聽到你了…" : "還沒收到聲音，講大聲一點"}
+            <p className="text-[12.5px] text-white/60" aria-live="polite">
+              錄音中，講完放開
             </p>
           )}
 

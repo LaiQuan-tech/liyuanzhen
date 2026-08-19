@@ -70,8 +70,25 @@ class RecorderProcessor extends AudioWorkletProcessor {
 registerProcessor("recorder-processor", RecorderProcessor);
 `;
 
-/** 低於這個 RMS 就當成「沒有收到聲音」。實測安靜房間的底噪約 0.001~0.003。 */
-export const SILENCE_RMS = 0.01;
+/**
+ * 低於這個 RMS 才算「麥克風根本沒在收音」。
+ *
+ * ⚠️ 這個數字**只用來抓真正的數位靜音**（麥克風被靜音、選到不存在的裝置），
+ * 不是用來判斷「講得夠不夠大聲」。不要調高。
+ *
+ * 實測（Chrome + 開啟 echoCancellation/noiseSuppression/autoGainControl 的
+ * 真實麥克風，2026-08-19）：
+ *   安靜房間、沒有人說話 …… 3 秒內 85ms 窗口峰值 0.00706
+ *   使用者正常說話 …………… 每秒 RMS 約 0.009 ~ 0.019
+ *
+ * 兩者只差一個數量級不到。我第一版把門檻設成 0.01，結果**擋掉了真的語音**——
+ * 使用者按住、講完、放開，得到「沒有收到聲音」。那比原本的沉默更糟，
+ * 因為它還指著錯的方向叫他去檢查麥克風。
+ *
+ * 被靜音的麥克風給的是 0 或 1e-8 等級，所以 0.001 就切得乾淨，
+ * 而且不會誤傷任何真的有收到東西的情況。低音量交給 Gemini 處理——實測它做得比門檻好。
+ */
+export const SILENCE_RMS = 0.001;
 
 export interface RecordingResult {
   wav: Uint8Array;
