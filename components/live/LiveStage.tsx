@@ -404,20 +404,10 @@ export default function LiveStage() {
                 ? "scale-105 bg-white text-ink"
                 : "bg-brand text-ink hover:brightness-105 active:scale-95",
             ].join(" ")}
-            style={
-              recording
-                ? {
-                    // 光圈跟著即時音量脹縮。⚠️ 這不只是好看——
-                    // 沒有它，「麥克風壞掉」跟「房間很安靜」在畫面上一模一樣，
-                    // 使用者講完發現沒反應時，完全無從判斷是誰的問題。
-                    // 用 style 而不是 class：Tailwind 產不出連續變化的值。
-                    // 校準自實測：安靜房間 0.007、正常說話 0.01~0.05。
-                    // 乘 220 的話說話只推到 10~19px，肉眼幾乎看不出在動。
-                    boxShadow: `0 0 0 ${Math.min(6 + level * 700, 44).toFixed(1)}px rgba(255,255,255,.22)`,
-                    transition: "box-shadow 90ms linear",
-                  }
-                : undefined
-            }
+            // ⚠️ 這裡原本有一圈跟著音量脹縮的 boxShadow。音量計做出來之後把它拿掉了：
+            // 它會擴散 44px，剛好把下面那排柱子糊在自己的灰影裡（實測截圖確認），
+            // 而且兩個東西同時跟著音量跳只是噪音。證明「聲音有進來」的工作交給音量計，
+            // 它畫的是真的送進 WAV 的取樣，比一圈光暈精確也好懂。
           >
             {recording ? liveCopy.talkRecording : liveCopy.talkIdle}
           </button>
