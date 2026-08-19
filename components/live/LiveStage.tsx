@@ -4,7 +4,14 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import AvatarStage, { type AvatarStageHandle } from "@/components/avatar/AvatarStage";
 import { speakableAnswer } from "@/lib/avatar";
-import { createRecorder, MicrophoneError, SILENCE_RMS, type Recorder } from "@/lib/live/recorder";
+import {
+  createRecorder,
+  MicrophoneError,
+  MAX_RECORDING_SECONDS,
+  SILENCE_RMS,
+  type Recorder,
+} from "@/lib/live/recorder";
+import { METER_BARS, meterBarHeight } from "@/lib/live/level";
 import {
   deriveLiveState,
   avatarStateFor,
@@ -69,6 +76,8 @@ export default function LiveStage() {
   const [phase, setPhase] = useState<TurnPhase>("idle");
   const [speaking, setSpeaking] = useState(false);
   const [notice, setNotice] = useState("");
+  /** 已經錄了幾秒。只用來顯示，不參與任何判斷。 */
+  const [elapsed, setElapsed] = useState(0);
   const [heard, setHeard] = useState("");
   const [answer, setAnswer] = useState("");
 
@@ -113,6 +122,18 @@ export default function LiveStage() {
       recorderRef.current = null;
     };
   }, []);
+
+  // 錄音秒數。⚠️ 200ms 更新一次就夠了——它只是給人看的，
+  // 更密只會多做無謂的 render，而音量計本來就一直在動。
+  useEffect(() => {
+    if (!recording) {
+      setElapsed(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const id = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 200);
+    return () => clearInterval(id);
+  }, [recording]);
 
   /** 跑完一輪：逐字稿 → RAG ＋ 生成 → 她開口 */
   const runTurn = useCallback(async (wav: Uint8Array) => {
@@ -406,13 +427,34 @@ export default function LiveStage() {
             實測底噪就有 0.007、而說話的瞬時值在字與字之間會掉回底噪，
             任何絕對門檻都會在使用者正常講話時反覆喊「沒收到」——冤枉人又嚇人。
 
-            會跟著聲音脹縮的光圈本身就是「麥克風活著」的證據，比文字可靠。
-            真正沒收到（麥克風被靜音）會在放開之後由 SILENCE_RMS 抓到並明說。
+            證明「聲音有進來」的工作交給音量計：它畫的是真的送進 WAV 的那些取樣，
+            不是一個猜測。真正沒收到（麥克風被靜音）會在放開之後由 SILENCE_RMS 抓到並明說。
           */}
           {recording && (
-            <p className="text-[12.5px] text-white/60" aria-live="polite">
-              錄音中，講完放開
-            </p>
+            <div className="flex flex-col items-center gap-2">
+              {/* 音量計本身是純視覺，讀屏不需要唸它 */}
+              <div className="flex h-7 items-center gap-[3px]" aria-hidden="true">
+                {METER_BARS.map((factor, i) => (
+                  <span
+                    key={i}
+                    className="w-[3px] rounded-full bg-white/85"
+                    style={{
+                      height: `${meterBarHeight(level, factor).toFixed(1)}px`,
+                      transition: "height 90ms linear",
+                    }}
+                  />
+                ))}
+              </div>
+              <p className="text-[12.5px] text-white/60" aria-live="polite">
+                {elapsed >= MAX_RECORDING_SECONDS - 5
+                  ? liveCopy.recordingNearCap
+                  : liveCopy.recordingHint}
+                {/* 秒數不進 aria-live——每秒唸一次數字對讀屏使用者是噪音 */}
+                <span aria-hidden="true" className="ml-2 tabular-nums text-white/45">
+                  {Math.floor(elapsed)} 秒
+                </span>
+              </p>
+            </div>
           )}
 
           {/* Footer 也是每頁自己掛的，這一頁沒掛，所以揭露要自己放 */}
