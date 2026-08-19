@@ -75,6 +75,23 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
   let dead = false;
   let speakingFallback: ReturnType<typeof setTimeout> | null = null;
 
+  /**
+   * 連線還沒建立完就送到的答案，先擱在這裡，等 prepare() 成功再說出來。
+   *
+   * ⚠️ 這不是最佳化，是一個**必要**的修正。實測（2026-08-19 正式站）：
+   *   prepare()：/api/avatar-token 0.9 秒 ＋ sessions/start 3.2 秒 ＋ 串流就緒
+   *              ＝ 約 5～8 秒
+   *   一輪問答：/api/stt 1.5～2.5 秒 ＋ /api/chat 0.5～3.6 秒 ＝ 約 2～6 秒
+   *
+   * 兩者在**第一題**必然交錯：答案幾乎一定比連線先到。舊版的 finish() 寫
+   * `if (dead || !prepared || !session) return;`，於是第一題的答案被無聲丟棄——
+   * 訪客按住、講完、放開，文字出現了，她卻一個字都沒說。第二題之後才正常。
+   * 使用者回報的「說話沒有反應」就是這個，跟麥克風、跟靜音門檻都無關。
+   *
+   * 只留最後一則：連續問的時候，舊的那則已經沒有意義了。
+   */
+  let pendingSpeech: string | null = null;
+
   function clearSpeakingFallback() {
     if (speakingFallback !== null) {
       clearTimeout(speakingFallback);
@@ -178,6 +195,25 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
    * max_session_duration，不是在客戶端偷偷續命。
    */
 
+  /**
+   * 真正發聲的那一段。finish() 與 prepare() 的補說都走這裡，
+   * 兩條路必須完全一樣——否則排隊補說的那一則會少掉 interrupt 或少掉降級。
+   */
+  function speakNow(active: LiveAvatarSession, text: string): void {
+    // ⚠️ 必須先 interrupt。speak 的語意是**排隊**不是打斷——
+    // 官方文件原文是「Adds audio to the avatar's playback buffer」。
+    // 訪客連續送問題時，少了這一行她會把上一題講完才開始這一題。
+    active.interrupt();
+    clearSpeakingFallback();
+
+    // 用她的克隆聲音。失敗時退回 HeyGen 內建語音，寧可聲音不像，
+    // 也不要整個回答變成無聲——文字使用者已經看到了。
+    speakWithClonedVoice(active, text).catch((error) => {
+      console.error("[avatar] 克隆語音失敗，改用內建語音：", error);
+      if (!dead && session) session.repeat(text);
+    });
+  }
+
   async function fetchToken(): Promise<string> {
     const response = await fetch(TOKEN_ENDPOINT, { method: "POST" });
     const body = (await response.json().catch(() => ({}))) as TokenResponse;
@@ -274,7 +310,16 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
 
         session = next;
         prepared = true;
+
+        // 連線期間送進來的答案在這裡補說。⚠️ 這一段不可以拿掉——
+        // 沒有它，每次開頁之後的第一題都是無聲的。
+        const queued = pendingSpeech;
+        pendingSpeech = null;
+        if (queued) speakNow(next, queued);
       } catch (error) {
+        // 連不上就沒有人能說那句話了。留著只會在下一次 prepare 成功時
+        // 突然講一段舊答案。
+        pendingSpeech = null;
         hooks.onFatal(error instanceof Error ? error : new Error(String(error)));
       } finally {
         preparing = false;
@@ -289,25 +334,26 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
     },
 
     finish(fullText) {
-      if (dead || !prepared || !session) return;
+      if (dead) return;
       const text = fullText.trim();
       if (!text) return;
 
-      // ⚠️ 必須先 interrupt。speak 的語意是**排隊**不是打斷——
-      // 官方文件原文是「Adds audio to the avatar's playback buffer」。
-      // 訪客連續送問題時，少了這一行她會把上一題講完才開始這一題。
-      session.interrupt();
-      clearSpeakingFallback();
+      // ⚠️ 還沒接通就把答案丟掉，等於第一題永遠不會有聲音。見 pendingSpeech 的說明。
+      // 只在「正在連線」時排隊：prepare() 根本沒被呼叫過的話沒有東西可以等，
+      // 排了也只會在很久以後憑空冒出一句話。
+      if (!prepared || !session) {
+        if (preparing) pendingSpeech = text;
+        return;
+      }
 
-      // 用她的克隆聲音。失敗時退回 HeyGen 內建語音，寧可聲音不像，
-      // 也不要整個回答變成無聲——文字使用者已經看到了。
-      speakWithClonedVoice(session, text).catch((error) => {
-        console.error("[avatar] 克隆語音失敗，改用內建語音：", error);
-        if (!dead && session) session.repeat(text);
-      });
+      speakNow(session, text);
     },
 
     stop() {
+      // ⚠️ 排隊中的那則也要丟掉，而且要在 `!session` 的提前 return 之前做。
+      // 使用者按下按鈕就是要打斷；讓一則幾秒前的答案在連線完成的瞬間才冒出來，
+      // 比她不出聲更難理解。
+      pendingSpeech = null;
       if (dead || !session) return;
       clearSpeakingFallback();
       session.interrupt();
@@ -317,6 +363,7 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
     async destroy() {
       dead = true;
       prepared = false;
+      pendingSpeech = null;
       clearSpeakingFallback();
       const current = session;
       session = null;

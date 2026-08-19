@@ -30,7 +30,17 @@ const MOCK_POSTER =
 export function createMockDriver(hooks: AvatarDriverHooks): AvatarDriver {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let prepared = false;
+  let preparing = false;
   let dead = false;
+
+  /**
+   * 連線期間送到的答案。⚠️ mock 存在的意義是「時序是真的」，
+   * 所以這個佇列一定要跟 heygen 有一模一樣的語意——
+   * 少了它，mock 就會把 heygen 上真實發生過的 bug 蓋掉：
+   * prepare 要 5～8 秒、一輪問答只要 2～6 秒，第一題的答案必然先到，
+   * 舊版直接丟棄，症狀是每次開頁後的第一題她都不出聲。
+   */
+  let pendingSpeech: string | null = null;
 
   function clearTimer() {
     if (timer !== null) {
@@ -44,6 +54,14 @@ export function createMockDriver(hooks: AvatarDriverHooks): AvatarDriver {
     hooks.onSpeakingChange(false);
   }
 
+  /** finish() 與 prepare() 的補說共用同一條路，兩邊行為必須完全一樣。 */
+  function speakNow(fullText: string) {
+    clearTimer();
+    const duration = Math.min(fullText.length * MS_PER_CHAR, MAX_SPEAK_MS);
+    hooks.onSpeakingChange(true);
+    timer = setTimeout(stopSpeaking, duration);
+  }
+
   return {
     provider: "mock",
     needsVideo: true, // 要走跟 heygen 一樣的 <video> 路徑，否則就測不到那條路
@@ -53,7 +71,8 @@ export function createMockDriver(hooks: AvatarDriverHooks): AvatarDriver {
     },
 
     async prepare(video) {
-      if (prepared || dead) return;
+      if (prepared || preparing || dead) return;
+      preparing = true;
 
       // 用一張靜止的畫面冒充串流：測交叉淡入時眼睛看得到差別。
       //
@@ -72,8 +91,17 @@ export function createMockDriver(hooks: AvatarDriverHooks): AvatarDriver {
       }
 
       await new Promise((resolve) => setTimeout(resolve, PREPARE_DELAY_MS));
-      if (dead) return;
+      preparing = false;
+      if (dead) {
+        pendingSpeech = null;
+        return;
+      }
       prepared = true;
+
+      // 連線期間送進來的答案在這裡補說，跟 heygen 同一套規則。
+      const queued = pendingSpeech;
+      pendingSpeech = null;
+      if (queued) speakNow(queued);
     },
 
     push() {
@@ -82,21 +110,25 @@ export function createMockDriver(hooks: AvatarDriverHooks): AvatarDriver {
     },
 
     finish(fullText) {
-      if (dead || !prepared) return;
-      clearTimer();
-
-      const duration = Math.min(fullText.length * MS_PER_CHAR, MAX_SPEAK_MS);
-      hooks.onSpeakingChange(true);
-      timer = setTimeout(stopSpeaking, duration);
+      if (dead) return;
+      if (!prepared) {
+        // 還在連線就先排隊；根本沒開始連線的話沒有東西可以等，直接忽略。
+        if (preparing) pendingSpeech = fullText;
+        return;
+      }
+      speakNow(fullText);
     },
 
     stop() {
+      // 排隊中的那則也要丟掉：使用者按下去就是要打斷。
+      pendingSpeech = null;
       if (dead) return;
       stopSpeaking();
     },
 
     async destroy() {
       dead = true;
+      pendingSpeech = null;
       clearTimer();
     },
   };
