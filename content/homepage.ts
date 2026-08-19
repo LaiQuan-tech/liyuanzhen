@@ -164,4 +164,14 @@ export const WORKS = [
  * 設成 null 時，首頁會顯示滿版色底 ＋ 巨大「李」字，**是完整的視覺不是破圖**。
  * 換圖只改這一個常數，不動版面。
  */
-export const PORTRAIT: { src: string; alt: string } | null = null;
+export const PORTRAIT: { src: string; alt: string } | null = {
+  src: "/liyuanzhen.jpg",
+  // alt 要描述**看得到的東西**，不要寫「李元貞的照片」——讀屏使用者已經知道那是圖片。
+  alt: "李元貞。短髮、細框眼鏡，黑色外套內搭深綠色 T 恤，站在老街屋前，目光望向鏡頭之外。",
+};
+
+/**
+ * ⚠️ 目前這張的原圖已經不在手邊，站上這張是 614×768（由 1024×768 裁成 4:5）。
+ * 在桌機 hero 大約是 1.2 倍像素密度，可以看但不算銳利。
+ * 之後拿到原檔，直接覆蓋 public/liyuanzhen.jpg 就好，這裡不用改。
+ */
