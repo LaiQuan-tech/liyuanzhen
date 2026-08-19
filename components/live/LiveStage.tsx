@@ -11,7 +11,7 @@ import {
   SILENCE_RMS,
   type Recorder,
 } from "@/lib/live/recorder";
-import { METER_BARS, meterBarHeight } from "@/lib/live/level";
+import { METER_BARS, meterBarHeight, smoothLevel } from "@/lib/live/level";
 import {
   deriveLiveState,
   avatarStateFor,
@@ -112,9 +112,9 @@ export default function LiveStage() {
         // 按住不放撞到 30 秒上限。當成放開處理，不要無聲地丟掉他講的話。
         autoStopRef.current();
       },
-      // 即時音量。⚠️ 做峰值保持 ＋ 衰減，不要直接餵瞬時值：
-      // 人講話字與字之間本來就有停頓，瞬時值會掉到底噪，畫面就一直閃。
-      (rms) => setLevel((prev) => Math.max(rms, prev * 0.82))
+      // 即時音量。⚠️ 一定要走 smoothLevel（峰值保持 ＋ 衰減），不要直接餵瞬時值：
+      // 人講話字與字之間本來就有停頓，瞬時值會掉到底噪，音量計就會塌成一排點。
+      (rms) => setLevel((prev) => smoothLevel(prev, rms))
     );
     recorderRef.current = recorder;
     return () => {

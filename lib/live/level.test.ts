@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { SILENCE_RMS } from "./recorder";
-import { METER_BARS, meterAmplitude, meterBarHeight } from "./level";
+import { METER_BARS, meterAmplitude, meterBarHeight, smoothLevel } from "./level";
 
 /**
  * 把「什麼叫沒收到聲音」的門檻釘住。
@@ -93,7 +93,25 @@ describe("METER_BARS 形狀", () => {
     expect(METER_BARS[3]).toBe(METER_BARS[3]);
   });
 
-  it("最矮的柱子仍然畫得出來（至少 3px），不然安靜時整排會消失", () => {
-    expect(meterBarHeight(0, Math.min(...METER_BARS))).toBe(3);
+  it("最矮的柱子仍然畫得出來（至少 4px），不然安靜時整排看起來像一排點", () => {
+    expect(meterBarHeight(0, Math.min(...METER_BARS))).toBe(4);
+  });
+});
+
+describe("smoothLevel 峰值保持", () => {
+  it("來了更大的音量就立刻跟上——不可以拖", () => {
+    expect(smoothLevel(0.002, 0.02)).toBe(0.02);
+  });
+
+  it("🔴 撐得過音節之間的空檔（約 0.25 秒 ＝ 3 塊），否則柱子會塌成一排點", () => {
+    let v = 0.02;
+    for (let i = 0; i < 3; i++) v = smoothLevel(v, 0.0005); // 空檔期間只剩底噪
+    expect(v / 0.02).toBeGreaterThan(0.7);
+  });
+
+  it("真的停止說話之後要落得下來，不能一直卡在高點", () => {
+    let v = 0.02;
+    for (let i = 0; i < 25; i++) v = smoothLevel(v, 0); // 約 2 秒
+    expect(v).toBeLessThan(0.002);
   });
 });

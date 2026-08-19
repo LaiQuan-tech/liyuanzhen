@@ -39,7 +39,25 @@ export function meterAmplitude(level: number): number {
   return Math.min(1, Math.sqrt(Math.max(0, level - VISUAL_FLOOR) * VISUAL_GAIN));
 }
 
-/** 單一根柱子的高度（px）。最低留 3px，讓音量計在安靜時仍然看得出是一排柱子。 */
+/** 單一根柱子的高度（px）。最低留 4px，讓音量計在安靜時仍然是一排柱子而不是一排點。 */
 export function meterBarHeight(level: number, factor: number): number {
-  return Math.max(3, meterAmplitude(level) * factor * 26);
+  return Math.max(4, meterAmplitude(level) * factor * 26);
+}
+
+/**
+ * 峰值保持的衰減係數。每收到一塊音訊（約 85ms）就乘一次。
+ *
+ * ⚠️ 這個數字直接決定音量計好不好用，不是隨手填的。
+ * 人講話字與字之間本來就有 0.2~0.3 秒的空檔，瞬時值那時候會掉回底噪。
+ * 第一版用 0.82，實測截圖抓到的就是「柱子塌成一排點」——
+ * 訪客正在講話，畫面看起來卻像沒收到聲音，正好違背這個元件存在的目的。
+ *
+ * 0.9 的話 3 塊（約 255ms）之後還有 73%，剛好撐過音節之間的空檔；
+ * 真的停止說話約 0.6 秒後才會落下去，仍然跟得上。
+ */
+export const LEVEL_DECAY = 0.9;
+
+/** 峰值保持 ＋ 衰減。⚠️ 不要直接把瞬時 RMS 餵給畫面，那會一直閃。 */
+export function smoothLevel(previous: number, rms: number): number {
+  return Math.max(rms, previous * LEVEL_DECAY);
 }
