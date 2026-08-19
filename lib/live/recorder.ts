@@ -70,12 +70,27 @@ class RecorderProcessor extends AudioWorkletProcessor {
 registerProcessor("recorder-processor", RecorderProcessor);
 `;
 
+/** 低於這個 RMS 就當成「沒有收到聲音」。實測安靜房間的底噪約 0.001~0.003。 */
+export const SILENCE_RMS = 0.01;
+
+export interface RecordingResult {
+  wav: Uint8Array;
+  /** 整段錄音的音量峰值。用來分辨「太安靜」與「說了但辨識不出」 */
+  peak: number;
+  seconds: number;
+}
+
 export interface Recorder {
   readonly recording: boolean;
   /** ⚠️ 必須在使用者手勢的呼叫堆疊裡呼叫。失敗時丟 MicrophoneError。 */
   start(): Promise<void>;
-  /** 停止並回傳 WAV。沒錄到東西（太短或空的）回 null。 */
-  stop(): Promise<Uint8Array | null>;
+  /**
+   * 停止並回傳結果。錄太短（< MIN_RECORDING_SECONDS）回 null——那是誤觸。
+   *
+   * ⚠️ 全靜音**不**回 null。呼叫端需要分辨「誤觸」與「真的按住講了話但沒收到聲音」，
+   * 後者必須給使用者回饋。用 peak 判斷，不要在這裡就吞掉。
+   */
+  stop(): Promise<RecordingResult | null>;
   /** 釋放所有資源。冪等。 */
   dispose(): Promise<void>;
 }
@@ -89,12 +104,17 @@ function isSupported(): boolean {
   );
 }
 
-export function createRecorder(onAutoStop?: () => void): Recorder {
+export function createRecorder(
+  onAutoStop?: () => void,
+  /** 錄音期間持續回報音量（0~1）。讓 UI 可以顯示「我聽到你了」。 */
+  onLevel?: (rms: number) => void
+): Recorder {
   let stream: MediaStream | null = null;
   let context: AudioContext | null = null;
   let node: AudioWorkletNode | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
   let chunks: Float32Array[] = [];
+  let peak = 0;
   let sampleRate = 48_000;
   let active = false;
   let capTimer: ReturnType<typeof setTimeout> | null = null;
@@ -177,10 +197,18 @@ export function createRecorder(onAutoStop?: () => void): Recorder {
     }
 
     chunks = [];
+    peak = 0;
     source = context.createMediaStreamSource(stream);
     node = new AudioWorkletNode(context, "recorder-processor");
     node.port.onmessage = (event: MessageEvent<Float32Array>) => {
       chunks.push(event.data);
+      // 順手算這一塊的 RMS：既給 UI 即時顯示，也累積成整段的峰值。
+      // 沒有這個數字，「麥克風壞掉」跟「房間很安靜」在畫面上長得一模一樣。
+      let sum = 0;
+      for (let i = 0; i < event.data.length; i++) sum += event.data[i] * event.data[i];
+      const rms = Math.sqrt(sum / event.data.length);
+      if (rms > peak) peak = rms;
+      onLevel?.(rms);
     };
     source.connect(node);
     // ⚠️ 不要接到 destination——那會把訪客自己的聲音播回喇叭，形成回授。
@@ -222,13 +250,17 @@ export function createRecorder(onAutoStop?: () => void): Recorder {
 
       const captured = chunks;
       const rate = sampleRate;
+      const capturedPeak = peak;
       teardown();
       chunks = [];
+      onLevel?.(0);
 
       const total = captured.reduce((sum, chunk) => sum + chunk.length, 0);
-      if (total / rate < MIN_RECORDING_SECONDS) return null;
+      const seconds = total / rate;
+      // 太短 ＝ 誤觸，安靜地忽略。這是唯一該安靜的情況。
+      if (seconds < MIN_RECORDING_SECONDS) return null;
 
-      return chunksToWav(captured, rate);
+      return { wav: chunksToWav(captured, rate), peak: capturedPeak, seconds };
     },
 
     async dispose() {

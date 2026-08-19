@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import AvatarStage, { type AvatarStageHandle } from "@/components/avatar/AvatarStage";
 import { speakableAnswer } from "@/lib/avatar";
-import { createRecorder, MicrophoneError, type Recorder } from "@/lib/live/recorder";
+import { createRecorder, MicrophoneError, SILENCE_RMS, type Recorder } from "@/lib/live/recorder";
 import {
   deriveLiveState,
   avatarStateFor,
@@ -64,6 +64,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  */
 export default function LiveStage() {
   const [recording, setRecording] = useState(false);
+  /** 麥克風即時音量（0~1）。只用來畫回饋，不參與任何判斷。 */
+  const [level, setLevel] = useState(0);
   const [phase, setPhase] = useState<TurnPhase>("idle");
   const [speaking, setSpeaking] = useState(false);
   const [notice, setNotice] = useState("");
@@ -96,10 +98,14 @@ export default function LiveStage() {
     // 預熱 lambda：冷啟動的 3~5 秒靜默是提案現場最尷尬的時刻
     fetch("/api/health").catch(() => {});
 
-    const recorder = createRecorder(() => {
-      // 按住不放撞到 30 秒上限。當成放開處理，不要無聲地丟掉他講的話。
-      autoStopRef.current();
-    });
+    const recorder = createRecorder(
+      () => {
+        // 按住不放撞到 30 秒上限。當成放開處理，不要無聲地丟掉他講的話。
+        autoStopRef.current();
+      },
+      // 即時音量。錄音期間讓按鈕跟著跳，使用者才知道麥克風真的有收到他。
+      (rms) => setLevel(rms)
+    );
     recorderRef.current = recorder;
     return () => {
       void recorder.dispose();
@@ -130,9 +136,15 @@ export default function LiveStage() {
         return;
       }
       const { transcript } = (await sttResponse.json()) as { transcript?: string };
-      // 空字串是正常結果（沒聽到人聲），安靜地什麼都不做——
-      // 顯示錯誤訊息只會讓訪客以為壞了
-      if (!transcript) return;
+      // ⚠️ 空字串**不可以**安靜地忽略。
+      // 這裡收到空字串代表使用者真的按住、真的講了（太短的誤觸在 recorder.stop()
+      // 就回 null 了，根本到不了這裡），只是辨識不出內容。
+      // 原本寫「安靜地什麼都不做」，實際症狀就是使用者回報的「說話沒有反應」——
+      // 按了、講了、放開，畫面一個字都沒變，他無法分辨是自己的問題還是網站壞了。
+      if (!transcript) {
+        setNotice(liveCopy.heardNothing);
+        return;
+      }
 
       // 逐字稿一回來就打上去（約 1 秒）。這是整段等待裡最重要的一個回饋：
       // 它證明她真的聽到了，接下來的幾秒沉默才不會像當機。
@@ -191,10 +203,24 @@ export default function LiveStage() {
     if (!recorder) return;
 
     setRecording(false);
-    const wav = await recorder.stop();
-    // 太短或沒錄到——當成誤觸，安靜地忽略
-    if (!wav) return;
-    await runTurn(wav);
+    const result = await recorder.stop();
+
+    // 太短 ＝ 誤觸。給一句提示就好，不要當成錯誤。
+    if (!result) {
+      setNotice(liveCopy.tooShort);
+      return;
+    }
+
+    // 有錄到但整段都在底噪之下——麥克風沒開、被靜音、或講得太小聲。
+    // ⚠️ 在這裡就擋下來，不要送去 /api/stt：伺服器只會回一個空字串，
+    // 而「沒收到聲音」跟「聽不出內容」對使用者是完全不同的兩件事，
+    // 前者要他去檢查麥克風，後者只要再講一次。
+    if (result.peak < SILENCE_RMS) {
+      setNotice(liveCopy.noSound);
+      return;
+    }
+
+    await runTurn(result.wav);
   }, [runTurn]);
 
   autoStopRef.current = () => void release();
@@ -204,6 +230,11 @@ export default function LiveStage() {
     if (!canStartRecording(state)) return;
 
     setNotice("");
+    // ⚠️ 上一輪的問題與答案要一起清掉。留著的話，新的提示會疊在舊問題下面
+    // （實測畫面：「你問：00:00」上面掛著「按住不放，講完再放開」），
+    // 使用者會以為那句提示是在回應舊的那一題。
+    setHeard("");
+    setAnswer("");
     stageRef.current?.reportActivity();
     // 她還在講就先閉嘴。這是刻意允許的打斷——
     // Sunny 展場版沒做，症狀是兩段語音重疊。
@@ -328,14 +359,33 @@ export default function LiveStage() {
             aria-pressed={recording}
             className={[
               "touch-none select-none rounded-full px-10 py-4 font-display text-[17px] font-bold",
-              "transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-45",
+              "transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45",
               recording
-                ? "scale-105 bg-white text-ink shadow-[0_0_0_10px_rgba(255,255,255,.18)]"
+                ? "scale-105 bg-white text-ink"
                 : "bg-brand text-ink hover:brightness-105 active:scale-95",
             ].join(" ")}
+            style={
+              recording
+                ? {
+                    // 光圈跟著即時音量脹縮。⚠️ 這不只是好看——
+                    // 沒有它，「麥克風壞掉」跟「房間很安靜」在畫面上一模一樣，
+                    // 使用者講完發現沒反應時，完全無從判斷是誰的問題。
+                    // 用 style 而不是 class：Tailwind 產不出連續變化的值。
+                    boxShadow: `0 0 0 ${Math.min(8 + level * 220, 42).toFixed(1)}px rgba(255,255,255,.20)`,
+                    transition: "box-shadow 90ms linear",
+                  }
+                : undefined
+            }
           >
             {recording ? liveCopy.talkRecording : liveCopy.talkIdle}
           </button>
+
+          {/* 錄音中才出現的收音狀態。文案講的是「有沒有收到」，不是音量數字。 */}
+          {recording && (
+            <p className="text-[12.5px] text-white/70" aria-live="polite">
+              {level >= SILENCE_RMS ? "聽到你了…" : "還沒收到聲音，講大聲一點"}
+            </p>
+          )}
 
           {/* Footer 也是每頁自己掛的，這一頁沒掛，所以揭露要自己放 */}
           <p className="max-w-2xl text-[10px] leading-snug text-white/35 sm:text-[11px]">
