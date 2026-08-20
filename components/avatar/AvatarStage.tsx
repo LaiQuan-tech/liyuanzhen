@@ -165,21 +165,27 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
    * 但程式其實是清成 null，而 driver 只在掛載時建立一次——
    * 那就是「切一次分頁之後影像再也回不來」的成因。
    */
-  const teardown = useCallback(async () => {
+  const teardown = useCallback(async (why = "未註明") => {
     idleRef.current?.stop();
     if (capRef.current) {
       clearTimeout(capRef.current);
       capRef.current = null;
     }
     preparingRef.current = null;
+    // ⚠️ 這一行就是「臉又變回靜態照片」的那一刻，所以它**在早退之前**就要留痕。
+    // 前一版只在成功收掉 session 之後才記，於是「沒有 driver 可收」那條路
+    // 會把畫面切回 poster 卻不留任何紀錄——查起來就跟臉從來沒出現過一樣。
     setVideoReady(false);
 
     const driver = driverRef.current;
-    if (!driver?.metered) return;
+    if (!driver?.metered) {
+      trace("畫面切回靜態照片", `${why}（沒有計費中的 session 要收）`, "warn");
+      return;
+    }
     driverRef.current = null;
     sessionLimitRef.current = null;
     await driver.destroy();
-    trace("串流被收掉", "閒置、切到背景、或撞到單次上限", "warn");
+    trace("串流被收掉", why, "warn");
     speakingCb.current(false);
     // 串流沒了還留著上一輪的字幕，畫面會停在訪客無法理解的中間態
     teardownCb.current?.();
@@ -287,9 +293,9 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     if (!needsVideo) return;
 
     const onHidden = () => {
-      if (document.visibilityState === "hidden") void teardown();
+      if (document.visibilityState === "hidden") void teardown("切到背景分頁");
     };
-    const onPageHide = () => void teardown();
+    const onPageHide = () => void teardown("離開頁面");
 
     document.addEventListener("visibilitychange", onHidden);
     window.addEventListener("pagehide", onPageHide);
@@ -359,8 +365,9 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
       availableCb.current?.(driver.audioAvailable);
 
       if (driver.metered) {
+        trace("畫面換成即時影像");
         setVideoReady(true);
-        idleRef.current = createIdleTimer(IDLE_MS, () => void teardown());
+        idleRef.current = createIdleTimer(IDLE_MS, () => void teardown("閒置逾時"));
         idleRef.current.start();
 
         // 伺服器說了算。⚠️ 提早 2 秒收手，讓我們自己乾淨地關掉 session，
@@ -368,7 +375,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
         // 前者才有機會顯示「連線已結束，按住說話可以重新開始」。
         const limit = sessionLimitRef.current;
         const capMs = limit ? Math.max(5_000, limit * 1000 - 2_000) : FALLBACK_CAP_MS;
-        capRef.current = setTimeout(() => void teardown(), capMs);
+        capRef.current = setTimeout(() => void teardown("撞到單次時間上限"), capMs);
       }
     })();
 
