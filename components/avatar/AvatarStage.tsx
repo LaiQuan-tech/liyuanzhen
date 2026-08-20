@@ -144,6 +144,20 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
   const sessionLimitRef = useRef<number | null>(null);
 
   /**
+   * 使用者用手勢解除過靜音了嗎。
+   *
+   * 🔴 這個 ref 存在的理由是 SDK 會在我們背後改 `<video>.muted`。
+   * livekit 的 attachToElement（index.esm.js:11488）寫死：
+   *     element.muted = mediaStream.getAudioTracks().length === 0;
+   * 串流帶音軌就是 false。也就是每一次 attach() 都會把影片解除靜音。
+   *
+   * 自動連線那一次沒有使用者手勢，而 Chrome 的自動播放政策不准一個
+   * **不靜音**的影片播放——結果是串流接上了、也在計費，畫面卻停在 poster。
+   * 所以 attach() 之後必須把靜音狀態按「使用者到底按過沒有」重新蓋回去。
+   */
+  const unmutedRef = useRef(false);
+
+  /**
    * 收掉會計費的 session。
    *
    * ⚠️ driver 物件在這裡是**丟掉**的（destroy 之後它永久失效），
@@ -295,6 +309,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     // 自動連線（autoStart）不帶 unmute：`<video>` 本來就是 muted + autoPlay，
     // 靜音播放不需要手勢，所以連得上、看得到，只是沒有聲音。
     if (options.unmute) {
+      unmutedRef.current = true;
       const video = videoRef.current;
       if (video) {
         video.muted = false;
@@ -329,6 +344,18 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
       }
 
       await driver.prepare(video ?? null);
+
+      // 🔴 attach() 之後把靜音狀態蓋回去，見 unmutedRef 的說明。
+      // 沒有這幾行，自動連線接上的串流在真實 Chrome 上是**播不動**的：
+      // SDK 把它解除靜音了，而沒有手勢的不靜音影片不准播。
+      if (video) {
+        video.muted = !unmutedRef.current;
+        video.play().catch((error) => {
+          // 靜默失敗看起來就跟壞掉一樣，所以要留痕跡
+          trace("attach 之後 play() 被擋", String(error), "error");
+        });
+      }
+
       availableCb.current?.(driver.audioAvailable);
 
       if (driver.metered) {
