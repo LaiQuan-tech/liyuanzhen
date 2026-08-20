@@ -34,7 +34,10 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
         : String(Date.now());
 
     // 預熱 lambda：冷啟動的 3~5 秒靜默是提案現場最尷尬的時刻
-    fetch("/api/health").catch(() => {});
+    // ⚠️ 要打 /api/chat 自己，不要打 /api/health——後者在正式站被 Vercel
+    // 邊緣快取（實測 x-vercel-cache: HIT），請求到不了任何 lambda。
+    // 而且每一支 route 在 Vercel 上是獨立的 function，熱了一支不代表熱了另一支。
+    void fetch("/api/chat", { method: "GET" }).catch(() => {});
   }, []);
 
   useEffect(() => {

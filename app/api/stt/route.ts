@@ -43,7 +43,12 @@ export async function GET() {
  * 位元組上限。
  *
  * 客戶端用 24kbps 的 opus 錄音（見 lib/live/recorder.ts 的 AUDIO_BITS_PER_SECOND），
- * 所以 30 秒約 90KB。250KB 留了將近三倍餘裕給 Safari 的 mp4／較高位元率的來源。
+ * 30 秒約 90KB；正式站實測 Chrome 錄 4 秒是 7KB（比要求的還低）。
+ *
+ * ⚠️ 但**不可以**照 Chrome 的數字抓。`audioBitsPerSecond` 是建議不是保證，
+ * Safari 的 AAC 預設在 64~128kbps，30 秒就是 240~480KB。抓 250KB 的話，
+ * 一個用 iPhone 問了長問題的訪客會拿到 413——而那在畫面上跟壞掉沒有分別。
+ * 600KB 讓最壞情況（128kbps × 30 秒）也進得來。
  *
  * ⚠️ **這個數字取代了原本的「解 WAV 標頭算秒數」那道門，而它比較弱，要老實承認。**
  * 壓縮容器的長度不看完整個檔案算不出來，而 Chrome 的 webm 標頭裡根本沒有總長度
@@ -54,7 +59,7 @@ export async function GET() {
  * ⚠️ 這道檢查必須在**讀進記憶體之前**用 Content-Length 做一次，
  * 否則「先讀完再檢查」等於讓攻擊者決定我們配置多少記憶體。
  */
-const MAX_AUDIO_BYTES = 250_000;
+const MAX_AUDIO_BYTES = 600_000;
 
 /**
  * 只有標頭、沒有內容。回空字串讓前端安靜地忽略，不要送去 Gemini 白花錢。
