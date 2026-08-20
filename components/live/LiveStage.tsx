@@ -249,7 +249,25 @@ export default function LiveStage() {
     }
   }, []);
 
-  /** 放開按鈕（或撞到錄音上限）→ 收音、送出 */
+  /**
+ * 麥克風權限還停在「尚未決定」嗎。
+ *
+ * ⚠️ 用 try/catch 包起來並預設 false：Permissions API 在 Safari 與 Firefox 上
+ * 對 `microphone` 這個名稱的支援不一致，查不到就當作沒有這回事，
+ * 走原本的誤觸文案——寧可少講一句，也不要對著授權過的人喊「請按允許」。
+ */
+async function microphonePending(): Promise<boolean> {
+  try {
+    const status = await navigator.permissions.query({
+      name: "microphone" as PermissionName,
+    });
+    return status.state === "prompt";
+  } catch {
+    return false;
+  }
+}
+
+/** 放開按鈕（或撞到錄音上限）→ 收音、送出 */
   const release = useCallback(async () => {
     const recorder = recorderRef.current;
     if (!recorder) return;
@@ -270,7 +288,11 @@ export default function LiveStage() {
 
     // 誤觸，或放得比 getUserMedia 還快。給一句提示就好，不要當成錯誤。
     if (outcome.kind !== "ok") {
-      setNotice(liveCopy.tooShort);
+      // ⚠️ 但要先排除「權限詢問還開著」這一種。第一次來訪按住說話會跳出
+      // 瀏覽器的麥克風權限詢問，而要按「允許」就必須先放開按鈕——
+      // 於是每個新訪客的第一次嘗試都注定被判成 aborted。
+      // 對他說「按住不放」是指著錯的方向，他會一直重複同一個注定失敗的動作。
+      setNotice((await microphonePending()) ? liveCopy.micNeedsAllow : liveCopy.tooShort);
       return;
     }
 
