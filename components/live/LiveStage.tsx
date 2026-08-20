@@ -273,7 +273,9 @@ export default function LiveStage() {
     // 跟錄音並行跑：session 建立約 0.9 秒，剛好被訪客講話的時間蓋過去，
     // 這段延遲是免費的。prepare() 本身冪等，第二次之後就是 no-op。
     startedRef.current = true;
-    void stageRef.current?.prepare();
+    // ⚠️ 這一次要帶 unmute：自動連線那一次刻意保持靜音（沒有手勢就解不了靜音），
+    // 所以真正讓她出聲的是這裡。
+    void stageRef.current?.prepare({ unmute: true });
 
     try {
       await recorderRef.current?.start();
@@ -324,6 +326,9 @@ export default function LiveStage() {
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-ink text-white">
+      {/* ⚠️ autoStart 只在這一頁開。/chat 也掛 AvatarStage，那邊自動連費用直接翻倍，
+          而且 /chat 的主體本來就是文字，沒有臉也完全能用。
+          poster 是 avatar 的來源照片（真實攝影），為什麼不掛浮水印見 AvatarStage 的 props 註解。 */}
       <AvatarStage
         ref={stageRef}
         state={avatarStateFor(state)}
@@ -332,6 +337,8 @@ export default function LiveStage() {
         onSpeakingChange={setSpeaking}
         onTeardown={handleTeardown}
         onSpeechFailed={handleSpeechFailed}
+        autoStart
+        poster="/avatar-poster.jpg"
       />
 
       {/* 頂部：身分標記。這一頁沒有 Nav，所以必須自己放。 */}
@@ -349,8 +356,19 @@ export default function LiveStage() {
       {/* 底部：字幕、免責、按鈕、揭露 */}
       <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-ink via-ink/85 to-transparent px-4 pb-5 pt-16 sm:px-6">
         <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 text-center">
+          {/*
+            ⚠️ 這一行原本是 13px、55% 白，壓在 17~20px 的答案上方——等於沒有。
+            user 的原話：「畫面上要出現已輸入的問題文字，這樣民眾才知道自己問了什麼」。
+            所以做成看得出是「你剛剛說的話」的泡泡，跟她的答案在視覺上分開。
+
+            ⚠️ 出現的**時機**不要動：逐字稿在放開後約 1.8 秒才會到（/api/stt 的往返），
+            那段空窗由「聽你說…」處理。要更早就得引入第二套辨識，已經定案不做。
+          */}
           {heard && (
-            <p className="text-[13px] text-white/55 sm:text-[14px]">你問：{heard}</p>
+            <p className="max-w-[92%] rounded-2xl bg-white/12 px-4 py-2 text-[15px] leading-snug text-white/90 sm:text-[17px]">
+              <span className="mr-1.5 text-white/50">你問</span>
+              {heard}
+            </p>
           )}
 
           {/* min-h 讓字幕出現／消失時按鈕不會跳動 */}

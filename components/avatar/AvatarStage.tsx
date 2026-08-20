@@ -37,7 +37,11 @@ const FALLBACK_CAP_MS = 5 * 60_000;
 
 export interface AvatarStageHandle {
   /** ⚠️ 必須在使用者手勢的呼叫堆疊裡呼叫。冪等。 */
-  prepare(): Promise<void>;
+  /**
+   * 接通串流。`unmute: true` 時同時解除靜音——那一段必須在使用者手勢裡呼叫。
+   * 自動連線請不要帶 unmute，見 AvatarStage 的 autoStart 說明。
+   */
+  prepare(options?: { unmute?: boolean }): Promise<void>;
   push(delta: string): void;
   finish(fullText: string): void;
   stop(): void;
@@ -77,6 +81,27 @@ interface Props {
    * ⚠️ 沒有人接這個回呼的話，訪客得到的就是完全沉默 ＋ 零解釋。
    */
   onSpeechFailed?(): void;
+  /**
+   * 一掛載就自動接串流（不等使用者手勢）。
+   *
+   * ⚠️ **只給 /live 用。** `/chat` 也掛這個元件，那邊自動連等於費用直接翻倍，
+   * 而且 /chat 的主體本來就是文字，沒有臉也完全能用。
+   *
+   * ⚠️ 自動連線一個 mount 只做一次。閒置被收掉之後**不會**自動再連——
+   * 會的話一個沒人看的分頁可以無上限地一直重連燒錢。收掉之後 poster 會淡回來，
+   * 使用者按下去才重接。
+   */
+  autoStart?: boolean;
+  /**
+   * 串流還沒接上時鋪在底層的靜態畫面。
+   *
+   * ⚠️ 這張是 avatar 的**來源照片**（真實攝影，從 LiveAvatar 的 preview_url 取得），
+   * 不是影片的一格。所以它**不掛**「AI 生成影像」浮水印——
+   * 那個標記是給即時對嘴影片用的，因為影片裡那些話不是她說的；
+   * 一張她本人的照片沒有那個問題，硬掛上去反而是在說一句假話。
+   * 同樣的判準寫在 content/homepage.ts 的 PORTRAIT 註解裡。
+   */
+  poster?: string;
 }
 
 const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
@@ -88,6 +113,8 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     provider: providerOverride,
     onTeardown,
     onSpeechFailed,
+    autoStart = false,
+    poster,
   },
   ref
 ) {
@@ -256,20 +283,30 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     };
   }, [needsVideo, teardown]);
 
-  const prepare = useCallback(async () => {
+  const prepare = useCallback(async (options: { unmute?: boolean } = {}) => {
+    // ⚠️ 解除靜音要做兩件事，順序都不能動：
+    //
+    // 1. 必須在手勢的**同步**段落做完——await 之後就不算使用者手勢了
+    // 2. 必須在下面 preparingRef 的早退**之前**。自動連線那一次還在飛的時候
+    //    使用者就按了下去，早退會讓那一次永遠不解除靜音，她就一直是無聲的
+    //
+    // 自動連線（autoStart）不帶 unmute：`<video>` 本來就是 muted + autoPlay，
+    // 靜音播放不需要手勢，所以連得上、看得到，只是沒有聲音。
+    if (options.unmute) {
+      const video = videoRef.current;
+      if (video) {
+        video.muted = false;
+        video.play().catch(() => {
+          // 靜默失敗看起來就跟壞掉一樣，所以要留痕跡
+          console.warn("[avatar] 自動播放被擋，需要使用者再點一次");
+        });
+      }
+    }
+
     // 正在備就不要再備一次。少了它就有 double-spend race。
     if (preparingRef.current) return preparingRef.current;
 
-    // ⚠️ 解除靜音必須在手勢的**同步**段落做完，await 之後就不算手勢了。
-    // 所以這一段一定要在 ensureDriver() 之前，不可以往下搬進 run。
     const video = videoRef.current;
-    if (video) {
-      video.muted = false;
-      video.play().catch(() => {
-        // 靜默失敗看起來就跟壞掉一樣，所以要留痕跡
-        console.warn("[avatar] 自動播放被擋，需要使用者再點一次");
-      });
-    }
 
     const run = (async () => {
       // ⚠️ driver 可能是 null——teardown 之後我們刻意把它丟掉。
@@ -314,6 +351,18 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     }
   }, [ensureDriver, teardown, videoReady]);
 
+  /**
+   * 自動連線。⚠️ 一個 mount 只做一次，見 props 的 autoStart 說明。
+   * 用 ref 而不是靠 effect 的 deps：`prepare` 的 deps 含 videoReady，
+   * 接通之後它會變成新的函式，沒有這道旗標就會再觸發一次。
+   */
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (!autoStart || autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    void prepare();
+  }, [autoStart, prepare]);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -338,11 +387,25 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     return (
       <div className="absolute inset-0 overflow-hidden bg-ink">
         <div
-          className="absolute inset-0 flex items-center justify-center transition-opacity duration-700"
+          className="absolute inset-0 transition-opacity duration-700"
           style={{ opacity: videoReady ? 0 : 1 }}
           aria-hidden={videoReady}
         >
-          <DigitalAvatar state={state} size="lg" showLabel={false} />
+          {/*
+            🔴 poster 只在「正在連線」時用，降級一定要回到「李」字。
+            兩者的意思完全相反：
+              needsVideo（heygen）還沒接上 → 臉等一下就會動，放靜態臉是對的
+              provider 是 monogram（額度用完／關閉／降級）→ 臉**不會**動了，
+                這時候放一張靜態臉等於騙訪客有數位人
+          */}
+          {poster && needsVideo ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={poster} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center">
+              <DigitalAvatar state={state} size="lg" showLabel={false} />
+            </div>
+          )}
         </div>
 
         {needsVideo && (
