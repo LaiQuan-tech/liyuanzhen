@@ -98,6 +98,24 @@
     line-height: 1.02;
     text-wrap: balance;
   }
+  /**
+   * 詩句版的主標。
+   *
+   * ⚠️ 不要直接用 .lz-h1。它是 clamp(40px, 7.4vw, 88px)，為 8 個字的短標語調的；
+   * 現在的主標是 16 個字的詩句，88px 在 700px 寬的欄位裡會斷成四行、
+   * 而且斷在「如果戰鬥，擁抱理」這種地方，詩的形狀整個散掉。
+   * 實測：長句要塞進 700px 欄寬，字級上限是 44px。
+   *
+   * 行高也不同——1.02 是給大字標語的，兩行詩擠在一起會黏住，所以放到 1.25。
+   */
+  .lz-h1-verse {
+    font-family: var(--font-baloo), var(--font-noto), sans-serif;
+    font-size: clamp(26px, 3vw, 42px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+    text-wrap: pretty;
+  }
   .lz-h2 {
     font-family: var(--font-baloo), var(--font-noto), sans-serif;
     font-size: clamp(31px, 4.9vw, 60px);
