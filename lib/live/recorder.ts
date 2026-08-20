@@ -106,6 +106,18 @@ export interface RecordingResult {
 const NO_AUDIO_HOLD_MS = 500;
 
 /**
+ * 開始收音之後，等第一塊音訊最多這麼久。
+ *
+ * worklet 每 4096 個取樣送一塊，48kHz 下約 85ms，正常情況遠遠不到。
+ * 等不到就代表 AudioContext 根本沒在 render——與其讓使用者對著一個死掉的
+ * 錄音管線講完三秒才發現，不如當場失敗、當場說。
+ */
+const FIRST_CHUNK_TIMEOUT_MS = 700;
+
+/** `context.resume()` 等多久。⚠️ 沒有使用者手勢時它會**永遠不 resolve**，不能裸 await。 */
+const RESUME_TIMEOUT_MS = 1_500;
+
+/**
  * 一次錄音的結局。
  *
  * ⚠️ 刻意不是 `RecordingResult | null`。舊版把「誤觸」與「一塊都沒收到」
@@ -182,6 +194,8 @@ export function createRecorder(
   let capTimer: ReturnType<typeof setTimeout> | null = null;
   /** 這一次按下去的時間。用來分辨「點太快」與「按住了但管線沒在跑」。 */
   let startedAt = 0;
+  /** 哪些 AudioContext 已經掛過 worklet。同一個 context 掛第二次會撞名。 */
+  const moduleLoadedFor = new WeakSet<AudioContext>();
 
   /**
    * ⚠️ 防護一：使用者點超快，`pointerup` 在 `getUserMedia` 還沒 resolve 就到了。
@@ -215,18 +229,16 @@ export function createRecorder(
     source = null;
     active = false;
 
-    // ⚠️ AudioContext 每次用完就關，下一次重開。
+    // ⚠️ **不要**在這裡關掉 AudioContext。
     //
-    // 舊版是 `context = context ?? new AudioContext()`，建立一次就終生重用。
-    // 症狀：睡眠喚醒、換音訊裝置、或瀏覽器把它暫停之後，它會停止 render，
-    // `process()` 再也不會被呼叫——於是每一次按住說話都收到零塊音訊，
-    // 音量計整排全平，而使用者只看到「按住不放，講完再放開」。
+    // 曾經改成「每次用完就關、下次重開」，想解決睡眠喚醒之後 context 變殭屍的問題。
+    // 但重建一定發生在 `await getUserMedia` **之後**，那時已經離開使用者手勢的窗口，
+    // 而沒有手勢的 `AudioContext.resume()` 會**永遠不 resolve**
+    //（實測：state 停在 suspended、currentTime 完全不前進、process() 一次都不會被呼叫）。
+    // 那個修法本身會製造它想解決的症狀。
     //
-    // 每次重開也順帶消掉另一個隱憂：同一個 context 上重複 addModule 會讓
-    // `registerProcessor("recorder-processor")` 撞名。
-    const closing = context;
-    context = null;
-    void closing?.close().catch(() => {});
+    // 現在的作法：重用 context，但在 buildGraph() 裡確認它**真的收得到音訊**，
+    // 收不到才回收重建。判斷用事實（第一塊有沒有進來），不用猜的。
   }
 
   async function doStart(): Promise<void> {
@@ -256,17 +268,20 @@ export function createRecorder(
     }
 
     stream = captured;
-    // 見 teardown()：每次都是新的 context，不重用
-    context = new AudioContext();
-    // 自動播放政策可能讓 context 一開始是 suspended
-    if (context.state === "suspended") await context.resume();
-    sampleRate = context.sampleRate;
 
-    const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
-    try {
-      await context.audioWorklet.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
+    // ⚠️ 接好之後要**確認真的收得到音訊**才算成功。第一次收不到就把 context 丟掉
+    // 重建一次，再收不到就當場報錯——不要讓使用者對著死掉的管線講完三秒才發現。
+    if (!(await buildGraph())) {
+      console.warn("[recorder] 收不到音訊，回收 AudioContext 重建一次");
+      teardown();
+      const dead = context;
+      context = null;
+      void dead?.close().catch(() => {});
+      if (abortPending) return;
+      if (!(await buildGraph())) {
+        teardown();
+        throw new MicrophoneError("unavailable");
+      }
     }
 
     if (abortPending) {
@@ -274,11 +289,69 @@ export function createRecorder(
       return;
     }
 
+    startedAt = Date.now();
+    active = true;
+
+    // 按住不放的保險。伺服器那邊也有 30 秒上限，這裡先收手是為了不要白錄。
+    clearCap();
+    capTimer = setTimeout(() => {
+      capTimer = null;
+      if (active) onAutoStop?.();
+    }, MAX_RECORDING_SECONDS * 1000);
+  }
+
+  /**
+   * 建 AudioContext ＋ 掛 worklet ＋ 接上音訊圖，並等第一塊音訊進來。
+   * 回傳「這條管線活著嗎」。
+   */
+  async function buildGraph(): Promise<boolean> {
+    if (!stream) return false;
+    context = context ?? new AudioContext();
+
+    if (context.state === "suspended") {
+      // ⚠️ 不可以裸 await：沒有使用者手勢時它永遠不會 resolve，start() 會整個卡住，
+      // 症狀是按下去按鈕永遠不變成「放開送出」。
+      const ctx = context;
+      const resumed = await Promise.race([
+        ctx.resume().then(() => true),
+        new Promise<boolean>((r) => setTimeout(() => r(false), RESUME_TIMEOUT_MS)),
+      ]);
+      if (!resumed) {
+        console.warn("[recorder] AudioContext.resume() 逾時——多半是沒有使用者手勢");
+        return false;
+      }
+    }
+    sampleRate = context.sampleRate;
+
+    if (!moduleLoadedFor.has(context)) {
+      // ⚠️ 同一個 context 上重複 addModule 會讓 registerProcessor 撞名而 reject，
+      // 所以每個 context 只掛一次。
+      const url = URL.createObjectURL(
+        new Blob([WORKLET_SOURCE], { type: "application/javascript" })
+      );
+      try {
+        await context.audioWorklet.addModule(url);
+        moduleLoadedFor.add(context);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+    if (abortPending) return false;
+
     chunks = [];
     peak = 0;
+
+    let announceFirst: (() => void) | null = null;
+    const gotFirst = new Promise<boolean>((resolve) => {
+      announceFirst = () => resolve(true);
+      setTimeout(() => resolve(false), FIRST_CHUNK_TIMEOUT_MS);
+    });
+
     source = context.createMediaStreamSource(stream);
     node = new AudioWorkletNode(context, "recorder-processor");
     node.port.onmessage = (event: MessageEvent<Float32Array>) => {
+      announceFirst?.();
+      announceFirst = null;
       chunks.push(event.data);
       // 順手算這一塊的 RMS：既給 UI 即時顯示，也累積成整段的峰值。
       // 沒有這個數字，「麥克風壞掉」跟「房間很安靜」在畫面上長得一模一樣。
@@ -288,18 +361,11 @@ export function createRecorder(
       if (rms > peak) peak = rms;
       onLevel?.(rms);
     };
-    source.connect(node);
-    startedAt = Date.now();
     // ⚠️ 不要接到 destination——那會把訪客自己的聲音播回喇叭，形成回授。
     // AudioWorkletNode 不接輸出也照樣會收到 process() 呼叫。
-    active = true;
+    source.connect(node);
 
-    // 按住不放的保險。伺服器那邊也有 30 秒上限，這裡先收手是為了不要白錄。
-    clearCap();
-    capTimer = setTimeout(() => {
-      capTimer = null;
-      if (active) onAutoStop?.();
-    }, MAX_RECORDING_SECONDS * 1000);
+    return gotFirst;
   }
 
   return {

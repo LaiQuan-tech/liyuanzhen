@@ -95,6 +95,15 @@ export default function LiveStage() {
    * 那能動，但它是一個沒有寫出來的假設，改動順序就會壞。
    */
   const autoStopRef = useRef<() => void>(() => {});
+  /**
+   * 這一輪的序號。
+   *
+   * ⚠️ `release()` 與 `runTurn()` 都是非同步的，而使用者隨時可以再按一次。
+   * 沒有這個序號，晚一步 resolve 的**上一輪**會把它的訊息寫回畫面——
+   * 實測畫面：新的錄音正在進行（按鈕是「放開送出」、音量計在動），
+   * 上面卻掛著上一輪的「按住不放，講完再放開。」，使用者完全無從理解。
+   */
+  const turnRef = useRef(0);
 
   const state = deriveLiveState({ recording, phase, speaking, errored: Boolean(notice) });
 
@@ -136,7 +145,9 @@ export default function LiveStage() {
   }, [recording]);
 
   /** 跑完一輪：逐字稿 → RAG ＋ 生成 → 她開口 */
-  const runTurn = useCallback(async (wav: Uint8Array) => {
+  const runTurn = useCallback(async (wav: Uint8Array, turn: number) => {
+    /** 使用者已經開始下一輪了嗎。是的話這一輪的所有結果都要丟掉。 */
+    const stale = () => turnRef.current !== turn;
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       setNotice(liveCopy.offline);
       return;
@@ -153,11 +164,13 @@ export default function LiveStage() {
         STT_TIMEOUT_MS
       );
 
+      if (stale()) return;
       if (!sttResponse.ok) {
         setNotice(liveCopy.notHeard);
         return;
       }
       const { transcript } = (await sttResponse.json()) as { transcript?: string };
+      if (stale()) return;
       // ⚠️ 空字串**不可以**安靜地忽略。
       // 這裡收到空字串代表使用者真的按住、真的講了（太短的誤觸在 recorder.stop()
       // 就回 null 了，根本到不了這裡），只是辨識不出內容。
@@ -186,6 +199,7 @@ export default function LiveStage() {
         CHAT_TIMEOUT_MS
       );
 
+      if (stale()) return;
       // ⚠️ 護欄 1：非 200 的 body 是錯誤訊息不是答案。
       // 這裡 return 掉，絕不讓它流到下面的 finish()。
       if (!chatResponse.ok || !chatResponse.body) {
@@ -199,6 +213,10 @@ export default function LiveStage() {
       let full = "";
       for (;;) {
         const { done, value } = await reader.read();
+        if (stale()) {
+          void reader.cancel().catch(() => {});
+          return;
+        }
         if (done) break;
         full += decoder.decode(value, { stream: true });
         setAnswer(full);
@@ -213,9 +231,9 @@ export default function LiveStage() {
       stageRef.current?.finish(speakableAnswer(full, GUARDED_REPLY));
     } catch (error) {
       console.error("[live] 這一輪失敗：", error);
-      setNotice(liveCopy.failed);
+      if (!stale()) setNotice(liveCopy.failed);
     } finally {
-      setPhase("idle");
+      if (!stale()) setPhase("idle");
     }
   }, []);
 
@@ -224,8 +242,11 @@ export default function LiveStage() {
     const recorder = recorderRef.current;
     if (!recorder) return;
 
+    const turn = turnRef.current;
     setRecording(false);
     const outcome = await recorder.stop();
+    // ⚠️ 使用者已經按下一輪了 → 這一輪的訊息一個字都不要寫回畫面
+    if (turnRef.current !== turn) return;
 
     // ⚠️ 這一支要**第一個**判斷，而且必須跟 tooShort 分開。
     // 按住夠久卻一塊音訊都沒收到 ＝ 錄音管線死掉，不是誤觸。
@@ -249,7 +270,7 @@ export default function LiveStage() {
       return;
     }
 
-    await runTurn(outcome.wav);
+    await runTurn(outcome.wav, turn);
   }, [runTurn]);
 
   autoStopRef.current = () => void release();
@@ -258,6 +279,9 @@ export default function LiveStage() {
   const press = useCallback(async () => {
     if (!canStartRecording(state)) return;
 
+    // 開新的一輪。⚠️ 一定要在清畫面**之前**遞增，
+    // 否則上一輪剛好在這個瞬間 resolve 的話還是會蓋回來。
+    turnRef.current += 1;
     setNotice("");
     // ⚠️ 上一輪的問題與答案要一起清掉。留著的話，新的提示會疊在舊問題下面
     // （實測畫面：「你問：00:00」上面掛著「按住不放，講完再放開」），
