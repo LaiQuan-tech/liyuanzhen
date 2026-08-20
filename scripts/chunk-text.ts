@@ -57,6 +57,47 @@ export function parseFrontMatter(raw: string): {
 }
 
 /**
+ * 把超過上限的單一段落在句子邊界切開。
+ *
+ * ⚠️ 沒有這一步的話，`chunkMarkdown` 遇到一個 2000 字的段落只能整段當一塊——
+ * 它是「打包段落」不是「切開段落」。實測《我來了！臺灣婦女改變了》的散文段落
+ * 長度是 600~2000 字（書的排版本來就是長段落），553 塊裡有 186 塊超過 600 字、
+ * 69 塊超過 1000 字。一個向量塞 2000 字，主題會被稀釋到檢索不出來。
+ *
+ * ⚠️ 帶換行的段落**不切**——那是詩。詩被切成半首比塊太大更糟：
+ * 她會把半首詩當散文唸出來。轉檔時詩保留斷行，散文接成一行，
+ * 所以「有沒有換行」剛好就是可靠的判準。
+ */
+export function splitLongParagraph(paragraph: string, maxChars: number): string[] {
+  if (paragraph.length <= maxChars) return [paragraph];
+  if (paragraph.includes("\n")) return [paragraph]; // 詩，不切
+
+  // 句號／問號／驚嘆號（含後面的收尾引號）當切點
+  const sentences = paragraph.match(/[^。！？]*[。！？]+[」』）\)]*|[^。！？]+$/g);
+  if (!sentences) return [paragraph];
+
+  const out: string[] = [];
+  let pack = "";
+  for (const sentence of sentences) {
+    if (pack && (pack + sentence).length > maxChars) {
+      out.push(pack);
+      pack = "";
+    }
+    // 單一句子就超過上限（極少見，多半是沒有句號的長串）→ 硬切
+    if (sentence.length > maxChars) {
+      if (pack) { out.push(pack); pack = ""; }
+      for (let i = 0; i < sentence.length; i += maxChars) {
+        out.push(sentence.slice(i, i + maxChars));
+      }
+      continue;
+    }
+    pack += sentence;
+  }
+  if (pack) out.push(pack);
+  return out;
+}
+
+/**
  * 依 markdown 的 ## 標題分節，節內再依段落打包成塊（含重疊）。
  */
 export function chunkMarkdown(
@@ -102,7 +143,9 @@ export function chunkMarkdown(
     const paragraphs = section.text
       .split(/\n\s*\n/)
       .map((p) => p.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      // 超長的散文段落先在句子邊界切開，見 splitLongParagraph 的說明
+      .flatMap((p) => splitLongParagraph(p, maxChars));
 
     let pack: string[] = [];
 

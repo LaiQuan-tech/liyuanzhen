@@ -59,11 +59,18 @@ export default function HomePage() {
           <div className="lz-wrap-wide grid items-center gap-10 md:grid-cols-[1fr_minmax(0,340px)]">
             <Reveal>
               <span className="lz-eyebrow">{AVATAR_NAME}</span>
+              {/* ⚠️ 這是她自己的詩，不是我們寫的標語。出處：〈兩女人散步——給芳枝〉，
+                  《我來了！臺灣婦女改變了》第 6 章，第 182 頁。
+                  原詩在「如果」之後跨行（「…黑夜來臨，如果／戰鬥，擁抱理想…」），
+                  這裡按語意重新斷行讓它獨立當標語時讀得順，**一個字都沒有改**。 */}
               <h1 className="lz-h1 mt-5">
-                父權牆上打小洞。
+                女戰士不怕，不怕黑夜來臨
                 <br />
-                釘子，要釘穿。
+                如果戰鬥，擁抱理想，黑夜即成愛人
               </h1>
+              <p className="mt-4 text-[13px] text-ink-soft/70">
+                —— 李元貞〈兩女人散步——給芳枝〉，《我來了！臺灣婦女改變了》
+              </p>
               <p className="lz-lead mt-5 !text-ink-soft">
                 李元貞，台灣婦運先驅。1982 年她辦了《婦女新知》，
                 從一本雜誌開始，一條一條把法律改過來。現在，你可以直接問她。
@@ -84,7 +91,10 @@ export default function HomePage() {
             <Reveal delay={0.12}>
               {/* 照片位。PORTRAIT 是 null 時這裡是完整的視覺，不是破圖——
                   換圖只改 content/homepage.ts 的一個常數，不動版面。 */}
-              <div className="lz-card aspect-[4/5] overflow-hidden !p-0">
+              {/* ⚠️ 比例跟著照片走。現用這張是 4:3 橫幅，容器若還是 4:5 直式，
+                  object-cover 會把左右裁掉——她的臉偏左，會被切到。
+                  換成直式照片時記得把這裡改回 aspect-[4/5]。 */}
+              <div className="lz-card aspect-[4/3] overflow-hidden !p-0">
                 {PORTRAIT ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img

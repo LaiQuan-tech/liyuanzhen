@@ -2,8 +2,18 @@ import { describe, it, expect } from "vitest";
 import { checkAnswer, stripMarkdown, createGuardedWriter } from "./answer-guard";
 
 describe("checkAnswer", () => {
+  it("🔴 史實敘述提到黨名不可以被擋——自傳第 1 章就有", () => {
+    // 灌進自傳之後，「出現黨名就整段擋掉」會讓「你們一家是怎麼來臺灣的？」
+    // 這種完全無害的問題拿到一句莫名其妙的婉拒。
+    expect(
+      checkAnswer("一九四九年，因為爸爸的海軍軍官身分，我們一家四口跟隨國民黨政府撤離大陸。").blocked
+    ).toBe(false);
+    expect(checkAnswer("葉菊蘭是民進黨籍的立法委員，我們在立法院合作推動婦女權益。").blocked).toBe(false);
+  });
+
   it("政黨表態要被攔下來", () => {
     expect(checkAnswer("我支持民進黨的性平政策").blocked).toBe(true);
+    expect(checkAnswer("我覺得國民黨做得比較好").blocked).toBe(true);
   });
 
   it("以本人身分做出新承諾要被攔下來", () => {
@@ -55,13 +65,16 @@ describe("createGuardedWriter", () => {
         blockedWith = m;
       }
     );
-    // 「民進黨」被切成三個 delta 送進來
+    // 表態句被切成三個 delta 送進來
     writer.push("我覺得民");
     writer.push("進");
     writer.push("黨很好");
     writer.finish();
 
-    expect(blockedWith).toBe("民進黨");
+    // ⚠️ 比對的是「表態」不是「黨名」，所以命中的字串會比黨名長。
+    // 灌進自傳之後不能再用「出現黨名就擋」——第 1 章就寫著
+    // 「跟隨國民黨政府撤離大陸」，那是史實敘述不是表態。
+    expect(blockedWith).toContain("民進黨");
   });
 
   it("被攔截後不再吐出任何內容", () => {

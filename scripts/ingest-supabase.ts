@@ -85,10 +85,24 @@ async function main() {
     .not("id", "is", null); // PostgREST 不接受無條件 delete，這是「全部」的寫法
   if (delError) throw new Error(`清空失敗：${delError.message}`);
 
-  // ── 3. 一次寫入 ──────────────────────────────────────────
-  console.log(`寫入 ${rows.length} 塊…`);
-  const { error } = await supabase.from("knowledge_chunks").insert(rows);
-  if (error) throw new Error(`寫入失敗：${error.message}`);
+  // ── 3. 分批寫入 ──────────────────────────────────────────
+  // ⚠️ 一次全送會爆掉：762 塊 × 768 維 float ≈ 7.6MB 的 JSON body，
+  // 超過 PostgREST 的請求上限。分批是**寫入方式**的改變，
+  // 不是策略的改變——上面「全部算完 → 清空整張表」那個順序不可以動。
+  const BATCH = 100;
+  console.log(`寫入 ${rows.length} 塊（每批 ${BATCH}）…`);
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const slice = rows.slice(i, i + BATCH);
+    const { error } = await supabase.from("knowledge_chunks").insert(slice);
+    if (error) {
+      throw new Error(
+        `寫入失敗（第 ${i + 1}~${i + slice.length} 塊）：${error.message}\n` +
+          "⚠️ 表已經清空但沒寫完，站上的檢索現在是壞的。修好之後一定要重跑這支。"
+      );
+    }
+    process.stdout.write(`  ${Math.min(i + BATCH, rows.length)}/${rows.length}\r`);
+  }
+  console.log("");
 
   const { count } = await supabase
     .from("knowledge_chunks")
