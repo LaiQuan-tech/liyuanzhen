@@ -1,28 +1,33 @@
 /**
- * 閘門驗證：Gemini 到底吃不吃我們自己編出來的 WAV。
+ * 閘門驗證：Gemini 到底吃不吃瀏覽器 MediaRecorder 產出的容器。
  *
- * 為什麼需要這支：Gemini 接受的音訊格式是 wav / mp3 / aiff / aac / ogg / flac，
- * **沒有 webm**——而 MediaRecorder 在 Chrome 只吐 `audio/webm;codecs=opus`。
- * 所以我們不用 MediaRecorder，改走 Web Audio 自己編 WAV（lib/live/wav.ts）。
+ * 🔴 這支存在的理由是一個代價很大的錯誤。
  *
- * ⚠️ 兩個刻意的設計：
+ * 原本這支驗的是「Gemini 吃不吃我們自己編的 WAV」，因為官方文件列的支援清單是
+ * wav / mp3 / aiff / aac / ogg / flac，**沒有 webm**，而 MediaRecorder 在 Chrome
+ * 只吐 webm。於是整條輸入路徑改走 AudioWorklet 自己編 WAV。
  *
- * 1. 讓音訊**走過我們自己的編碼器**，而不是用 ffmpeg 直接產一個 WAV。
- *    後者只能證明「Gemini 吃 WAV」，證明不了「Gemini 吃**我們編的** WAV」——
- *    而真正會出錯的是後者（標頭端序、取樣率欄位、Int16 溢位）。
+ * 那個推論從來沒有被實測過，而且是錯的。2026-08-20 實打 gemini-3.5-flash：
+ * webm/opus、Chrome 式無總長度 webm、ogg/opus、Safari 的 mp4/aac，全部 200、
+ * 逐字稿正確。錯誤前提換來的是一條跨 AudioContext ／ AudioWorklet ／
+ * 自動播放政策的管線，以及五輪「按住說話沒反應」。
  *
- * 2. 呼叫 `lib/stt` 的 `transcribe()` 而不是自己寫一份 API 呼叫。
- *    驗的必須是真的會上線的那條路，否則驗過了也不代表什麼。
+ * 所以這支現在驗的是**真正該驗的那件事**：把一個檔案丟進去，
+ * 看它是不是被認得出容器、而且 Gemini 收得下。
+ *
+ * ⚠️ 一樣呼叫 `lib/stt` 的 `transcribe()` 而不是自己寫一份 API 呼叫——
+ * 驗的必須是真的會上線的那條路，否則驗過了也不代表什麼。
  *
  * 用法：
- *   ffmpeg -i 某段中文語音.mp3 -ac 1 -ar 48000 -f f32le mic-sim.raw
- *   npm run verify:stt -- mic-sim.raw [來源取樣率]
+ *   npm run verify:stt -- 某段語音.webm
  *
- * 那個 .raw 就是瀏覽器 AudioWorklet 會交給我們的東西（單聲道 Float32），
- * 所以這支等於在沒有瀏覽器的情況下重演整條輸入路徑。
+ * 想一次驗完三種瀏覽器會產生的格式：
+ *   ffmpeg -i 語音.wav -c:a libopus -f webm -live 1 chrome.webm
+ *   ffmpeg -i 語音.wav -c:a libopus firefox.ogg
+ *   ffmpeg -i 語音.wav -c:a aac safari.m4a
  */
-import { readFileSync, writeFileSync } from "node:fs";
-import { chunksToWav, wavDurationSeconds, TARGET_SAMPLE_RATE } from "../lib/live/wav";
+import { readFileSync } from "node:fs";
+import { sniffAudioContainer } from "../lib/live/audio-format";
 import { transcribe, hasSttCredentials, STT_MODEL } from "../lib/stt";
 
 async function main() {
@@ -33,50 +38,34 @@ async function main() {
 
   const path = process.argv[2];
   if (!path) {
-    console.error("用法：npm run verify:stt -- <f32le 裸音訊> [來源取樣率，預設 48000]");
+    console.error("用法：npm run verify:stt -- <音訊檔>");
     process.exit(1);
   }
-  const inputRate = Number(process.argv[3] ?? 48_000);
 
-  // 讀進來的是裸 Float32（little-endian），正是 AudioWorklet 會給我們的格式
-  const raw = readFileSync(path);
-  const floats = new Float32Array(
-    raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)
-  );
-  console.log(
-    `來源：${floats.length} 個取樣 @ ${inputRate}Hz ＝ ${(floats.length / inputRate).toFixed(1)} 秒`
-  );
+  const bytes = new Uint8Array(readFileSync(path));
 
-  // ← 這一行就是要驗的編碼器
-  const wav = chunksToWav([floats], inputRate);
-  const seconds = wavDurationSeconds(wav.length);
-  console.log(
-    `編碼後：${(wav.length / 1024).toFixed(0)} KB @ ${TARGET_SAMPLE_RATE}Hz ＝ ` +
-      `${seconds.toFixed(1)} 秒（${(wav.length / 1024 / seconds).toFixed(0)} KB/秒）`
-  );
+  // ⚠️ 先過守門那一關。伺服器不相信 Content-Type，這裡也不要相信副檔名。
+  const container = sniffAudioContainer(bytes);
+  if (!container) {
+    console.error(`✗ 認不出容器——這個檔案會被 /api/stt 以 400 擋下`);
+    process.exit(1);
+  }
 
-  // 落一份檔案，人耳可以直接開來聽——標頭寫壞的話這裡就播不出來了
-  const wavPath = `${path.replace(/\.[^.]+$/, "")}.our-encoder.wav`;
-  writeFileSync(wavPath, wav);
-  console.log(`已寫出 ${wavPath}（可以直接播來確認沒有雜訊或速度不對）\n`);
+  console.log(`檔案 ${path}`);
+  console.log(`容器 ${container}（看位元組認的，不是副檔名）`);
+  console.log(`大小 ${bytes.byteLength} bytes`);
+  console.log(`模型 ${STT_MODEL}`);
 
-  const started = Date.now();
-  const transcript = await transcribe(wav);
-  const elapsed = Date.now() - started;
-
-  console.log(`${STT_MODEL} 回應（${elapsed}ms）：`);
-  console.log("─".repeat(60));
-  console.log(transcript || "（空的——代表沒聽到人聲）");
-  console.log("─".repeat(60));
+  const began = Date.now();
+  const transcript = await transcribe(bytes, container);
+  const elapsed = Date.now() - began;
 
   if (!transcript) {
-    console.error("\n❌ 閘門未通過：沒有回出逐字稿。");
+    console.error(`✗ ${elapsed}ms 回了空字串——收得下但沒聽出人聲`);
     process.exit(1);
   }
-  console.log(`\n✅ 閘門通過：${transcript.length} 字，${elapsed}ms。`);
+  console.log(`✓ ${elapsed}ms`);
+  console.log(`逐字稿：${transcript}`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+void main();

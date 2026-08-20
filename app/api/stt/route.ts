@@ -1,13 +1,13 @@
 import type { NextRequest } from "next/server";
 import { transcribe, hasSttCredentials } from "@/lib/stt";
-import { parseWavHeader } from "@/lib/live/wav";
+import { sniffAudioContainer } from "@/lib/live/audio-format";
 import { clientIp, sttRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
 /**
- * 把訪客按住說話錄下來的 WAV 轉成文字。/live 的第一站。
+ * 把訪客按住說話錄下來的音訊轉成文字。/live 的第一站。
  *
  * ⚠️ 這支端點會花錢（Gemini 額度），跟 /api/chat 一樣要守。
  * 而且它比其他兩支更容易被當成沙包——**接受任意二進位上傳**的端點，
@@ -16,19 +16,27 @@ export const maxDuration = 30;
  */
 
 /**
- * 30 秒。一個問題再長也不會到這個數字，設上限是為了擋「按住不放」燒額度。
- * Gemini 音訊計費約 32 token/秒，30 秒 ≈ 960 token，還在可控範圍。
- */
-const MAX_AUDIO_SECONDS = 30;
-
-/**
- * 位元組上限。16kHz 單聲道 16-bit ＝ 32KB/秒，所以 30 秒約 960KB。
- * 抓 1.5MB 留餘裕給較高取樣率的來源，同時仍然遠低於會撐爆記憶體的量。
+ * 位元組上限。
+ *
+ * 客戶端用 24kbps 的 opus 錄音（見 lib/live/recorder.ts 的 AUDIO_BITS_PER_SECOND），
+ * 所以 30 秒約 90KB。250KB 留了將近三倍餘裕給 Safari 的 mp4／較高位元率的來源。
+ *
+ * ⚠️ **這個數字取代了原本的「解 WAV 標頭算秒數」那道門，而它比較弱，要老實承認。**
+ * 壓縮容器的長度不看完整個檔案算不出來，而 Chrome 的 webm 標頭裡根本沒有總長度
+ *（實測 ffprobe 回 N/A）。對方如果刻意用極低位元率編碼，250KB 可以塞進好幾分鐘。
+ * 擋這種人的是每 IP 限流那一道，不是這一道；這一道擋的是正常使用者「按住不放」
+ * 與「隨手 POST 一個大檔」。客戶端自己也有 30 秒上限。
  *
  * ⚠️ 這道檢查必須在**讀進記憶體之前**用 Content-Length 做一次，
  * 否則「先讀完再檢查」等於讓攻擊者決定我們配置多少記憶體。
  */
-const MAX_AUDIO_BYTES = 1_500_000;
+const MAX_AUDIO_BYTES = 250_000;
+
+/**
+ * 只有標頭、沒有內容。回空字串讓前端安靜地忽略，不要送去 Gemini 白花錢。
+ * 跟客戶端的 EMPTY_AUDIO_BYTES 同一個意思。
+ */
+const EMPTY_AUDIO_BYTES = 800;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -81,21 +89,19 @@ export async function POST(request: NextRequest) {
     return json({ error: "錄音過長。", reason: "too_large" }, 413);
   }
 
-  // 不相信客戶端說的格式——自己解標頭。垃圾位元組在這裡就該被擋下，不要送去 Gemini。
-  const header = parseWavHeader(audio);
-  if (!header) {
+  // ⚠️ 不相信客戶端說的格式——自己看開頭的魔術位元組。
+  // 垃圾在這裡就該被擋下，不要送去 Gemini。
+  const container = sniffAudioContainer(audio);
+  if (!container) {
     return json({ error: "音訊格式不正確。", reason: "bad_format" }, 400);
   }
-  if (header.durationSeconds > MAX_AUDIO_SECONDS) {
-    return json({ error: "錄音過長。", reason: "too_long" }, 413);
-  }
-  if (header.durationSeconds < 0.2) {
-    // 按一下就放開。這不是錯誤，只是沒有內容——回空字串讓前端安靜地忽略。
+  if (audio.byteLength <= EMPTY_AUDIO_BYTES) {
+    // 按一下就放開。這不是錯誤，只是沒有內容。
     return json({ transcript: "" });
   }
 
   try {
-    const transcript = await transcribe(audio);
+    const transcript = await transcribe(audio, container);
     // ⚠️ 空字串是正常結果（沒聽到人聲），不是錯誤。
     // 回 200 讓前端知道「有跑完，只是沒東西」，跟 502 要分得開。
     return json({ transcript });

@@ -77,10 +77,15 @@ export function hasSttCredentials(): boolean {
 }
 
 /**
- * 把 WAV 送去轉錄。回傳空字串代表「沒聽到人聲」，那是正常結果不是錯誤——
+ * 把音訊送去轉錄。回傳空字串代表「沒聽到人聲」，那是正常結果不是錯誤——
  * 呼叫端應該安靜地什麼都不做，而不是顯示錯誤訊息。
+ *
+ * ⚠️ `mimeType` 由呼叫端**看位元組認出來**再傳進來，不是照抄 Content-Type。
  */
-export async function transcribe(wav: Uint8Array): Promise<string> {
+export async function transcribe(
+  audio: Uint8Array,
+  mimeType = "audio/webm"
+): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
@@ -93,10 +98,17 @@ export async function transcribe(wav: Uint8Array): Promise<string> {
         parts: [
           {
             inlineData: {
-              // ⚠️ Gemini 接受 wav / mp3 / aiff / aac / ogg / flac，**沒有 webm**。
-              // 這就是我們不用 MediaRecorder、自己編 WAV 的原因（lib/live/wav.ts）。
-              mimeType: "audio/wav",
-              data: Buffer.from(wav).toString("base64"),
+              // 🔴 官方文件列的支援清單裡沒有 webm，但**實測是收的**。
+              // 2026-08-20 對 gemini-3.5-flash 實打，逐字稿都正確：
+              //   webm/opus（含 Chrome 那種標頭沒有總長度的）… 200
+              //   ogg/opus ……………………………………………………………… 200
+              //   mp4/aac（Safari 的 MediaRecorder 輸出）………… 200
+              //   wav …………………………………………………………………………… 200
+              // 之前照文件推論「不收 webm」，換來一條跨 AudioContext／
+              // AudioWorklet／自動播放政策的自編 WAV 管線，以及五輪的
+              // 「按住說話沒反應」。要改這一行之前先實測，不要再照文件推論。
+              mimeType,
+              data: Buffer.from(audio).toString("base64"),
             },
           },
           { text: PROMPT },

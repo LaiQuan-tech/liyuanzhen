@@ -10,6 +10,7 @@ import {
   MAX_RECORDING_SECONDS,
   SILENCE_RMS,
   type Recorder,
+  type RecordingResult,
 } from "@/lib/live/recorder";
 import { METER_BARS, meterBarHeight, smoothLevel } from "@/lib/live/level";
 import TracePanel from "@/components/live/TracePanel";
@@ -126,9 +127,6 @@ export default function LiveStage() {
       // 即時音量。⚠️ 一定要走 smoothLevel（峰值保持 ＋ 衰減），不要直接餵瞬時值：
       // 人講話字與字之間本來就有停頓，瞬時值會掉到底噪，音量計就會塌成一排點。
       onLevel: (rms) => setLevel((prev) => smoothLevel(prev, rms)),
-      // 麥克風接上了卻一塊音訊都沒有。⚠️ 這一句要在**訪客還在講**的時候就出現——
-      // 等他講完三秒才發現對著一條死掉的管線，是最浪費人的失敗方式。
-      onNoAudio: () => setNotice(liveCopy.micSilentLive),
     });
     recorderRef.current = recorder;
     return () => {
@@ -150,7 +148,7 @@ export default function LiveStage() {
   }, [recording]);
 
   /** 跑完一輪：逐字稿 → RAG ＋ 生成 → 她開口 */
-  const runTurn = useCallback(async (wav: Uint8Array, turn: number) => {
+  const runTurn = useCallback(async (audio: RecordingResult, turn: number) => {
     /** 使用者已經開始下一輪了嗎。是的話這一輪的所有結果都要丟掉。 */
     const stale = () => turnRef.current !== turn;
     if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -160,12 +158,17 @@ export default function LiveStage() {
 
     setPhase("transcribing");
     try {
-      trace("送出音訊到 /api/stt", `${(wav.length / 48_000).toFixed(1)}s`);
+      trace(
+        "送出音訊到 /api/stt",
+        `${audio.seconds.toFixed(1)}s、${audio.blob.size} bytes、${audio.mimeType}`
+      );
       const sttResponse = await withTimeout(
         fetch("/api/stt", {
           method: "POST",
-          headers: { "Content-Type": "audio/wav" },
-          body: new Blob([wav as BlobPart], { type: "audio/wav" }),
+          // ⚠️ 用錄音器回報的 mimeType，不要寫死。Chrome 給 webm、Safari 給 mp4、
+          // Firefox 給 ogg，三種 Gemini 都收（實測見 lib/live/recorder.ts 檔頭）。
+          headers: { "Content-Type": audio.mimeType },
+          body: audio.blob,
         }),
         STT_TIMEOUT_MS
       );
@@ -299,13 +302,17 @@ async function microphonePending(): Promise<boolean> {
     // 有錄到但整段都在底噪之下——麥克風沒開、被靜音、或講得太小聲。
     // ⚠️ 在這裡就擋下來，不要送去 /api/stt：伺服器只會回一個空字串，
     // 而「沒收到聲音」跟「聽不出內容」對使用者是完全不同的兩件事。
-    if (outcome.peak < SILENCE_RMS) {
+    //
+    // 🔴 `peak` 是 null 時**一定要放行**。null 代表音量計沒跑起來（AudioContext
+    // 被自動播放政策擋住），那是「不知道」不是「靜音」。當成 0 的話，
+    // 訪客明明講了話卻會被回「沒有收到聲音」——而且他完全無從得知為什麼。
+    if (outcome.peak !== null && outcome.peak < SILENCE_RMS) {
       trace("整段都在底噪之下", `峰值 ${outcome.peak.toFixed(5)} < ${SILENCE_RMS}`, "warn");
       setNotice(liveCopy.noSound);
       return;
     }
 
-    await runTurn(outcome.wav, turn);
+    await runTurn(outcome, turn);
   }, [runTurn]);
 
   autoStopRef.current = () => void release();
