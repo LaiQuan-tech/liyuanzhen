@@ -1,6 +1,14 @@
 import { createAdminSupabase, hasSupabase } from "@/lib/supabase";
 
 export const runtime = "nodejs";
+/**
+ * 🔴 不可以拿掉。少了這一行，Vercel 會把這支預先算好放到邊緣快取
+ *（實測正式站 `x-vercel-cache: HIT`、`age: 141`），於是：
+ *   1. 它回報的是**建置當下**資料庫的狀態，資料庫現在掛了它照樣回 200
+ *   2. 拿它預熱 lambda 完全無效——請求連 lambda 都碰不到
+ * 這兩件事下面的註解都寫了要避免，但少了這一行都沒有做到。
+ */
+export const dynamic = "force-dynamic";
 
 /**
  * 首頁掛載時會 ping 這支預熱 lambda，避免第一個問題卡在冷啟動。

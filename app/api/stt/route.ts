@@ -5,6 +5,30 @@ import { clientIp, sttRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
+export const dynamic = "force-dynamic";
+
+/**
+ * 預熱。
+ *
+ * 🔴 這支存在的理由是原本的預熱**打錯了對象**。
+ * `/live` 掛載時 ping 的是 `/api/health`，而那支在正式站是被 Vercel 邊緣快取的
+ *（實測 `x-vercel-cache: HIT`、`age: 141`），請求根本到不了任何 lambda。
+ * 真正需要熱的是這一支，而它從來沒被熱過。
+ *
+ * 症狀：安靜一段時間之後的第一個問題會撞上冷啟動。實測正式站上一次
+ * 超過 20 秒而被前端的逾時丟掉，訪客看到的是「抱歉，我需要休息一下」——
+ * 一個完全正確的請求，被當成失敗。
+ *
+ * ⚠️ 這支刻意什麼都不做。lambda 被叫醒、模組被求值，預熱就完成了；
+ * 多做任何事都只是給不需要的人花錢。
+ */
+export async function GET() {
+  return new Response(JSON.stringify({ warm: true }), {
+    status: 200,
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
+
 
 /**
  * 把訪客按住說話錄下來的音訊轉成文字。/live 的第一站。

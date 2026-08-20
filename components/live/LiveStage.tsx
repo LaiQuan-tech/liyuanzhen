@@ -38,7 +38,15 @@ interface Turn {
 
 /** 逾時。⚠️ 只包得住 fetch，包不住讀 body——串流讀取要另外想。 */
 const STT_TIMEOUT_MS = 15_000;
-const CHAT_TIMEOUT_MS = 20_000;
+/**
+ * ⚠️ 要跟伺服器的 `maxDuration`（30 秒）對齊，不要比它短。
+ *
+ * 原本是 20 秒，而正式站冷啟動的 /api/chat 實測超過 20 秒——於是前端在
+ * 伺服器還在正常工作的時候就把它丟掉了，畫面顯示「抱歉，我需要休息一下」。
+ * 比伺服器早放棄，只會把「慢」變成「失敗」。預熱（見上面）是主要修法，
+ * 這個數字是安全網。
+ */
+const CHAT_TIMEOUT_MS = 28_000;
 
 /**
  * 這一頁要的是串流虛擬人——沒有那張臉，/live 就沒有存在的意義，
@@ -116,8 +124,18 @@ export default function LiveStage() {
         ? crypto.randomUUID()
         : String(Date.now());
 
-    // 預熱 lambda：冷啟動的 3~5 秒靜默是提案現場最尷尬的時刻
-    fetch("/api/health").catch(() => {});
+    // 預熱這一頁真正會用到的兩支 lambda。
+    //
+    // 🔴 原本這裡只 ping `/api/health`，而那支在正式站是被 Vercel 邊緣快取的
+    // （實測 `x-vercel-cache: HIT`、`age: 141`），請求根本到不了任何 lambda——
+    // 也就是這幾個月的「預熱」一次都沒有真的發生過。
+    // 實測正式站冷啟動的 /api/chat 超過 20 秒，被前端逾時丟掉，
+    // 訪客看到的是「抱歉，我需要休息一下」：一個完全正確的請求被當成失敗。
+    //
+    // ⚠️ 要打的是**這一頁自己會用的那幾支**。Vercel 上每一支 route 是獨立的
+    // function，熱了一支不代表熱了另一支。
+    void fetch("/api/stt", { method: "GET" }).catch(() => {});
+    void fetch("/api/chat", { method: "GET" }).catch(() => {});
 
     const recorder = createRecorder({
       onAutoStop: () => {
