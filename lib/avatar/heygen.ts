@@ -1,4 +1,5 @@
 import type { AvatarDriver, AvatarDriverHooks } from "./types";
+import { trace } from "@/lib/trace";
 
 /**
  * LiveAvatar（前 HeyGen Interactive Avatar）driver。
@@ -135,6 +136,7 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
       hooks.onSpeakingChange(false);
     }, SPEAK_STARTUP_TIMEOUT_MS);
 
+    trace("向 /api/tts 要克隆語音", `${text.length} 字`);
     const stream = await fetchTtsStream(text);
 
     // 邊收邊送。每收滿約一秒就丟一塊進播放緩衝，她在講第一塊時後面的還在傳——
@@ -173,6 +175,7 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
     flush(pending.subarray(0, pending.length - (pending.length % 2)));
 
     const seconds = totalBytes / BYTES_PER_SECOND;
+    trace("語音送進 avatar 播放緩衝", `${seconds.toFixed(1)}s 音訊`);
 
     clearSpeakingFallback();
     speakingFallback = setTimeout(
@@ -245,7 +248,7 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
     // 用她的克隆聲音。失敗時退回 HeyGen 內建語音，寧可聲音不像，
     // 也不要整個回答變成無聲——文字使用者已經看到了。
     speakWithClonedVoice(active, text).catch((error) => {
-      console.error("[avatar] 克隆語音失敗：", error);
+      trace("克隆語音失敗", error instanceof Error ? error.message : String(error), "error");
       if (dead) return;
 
       // ⚠️ 一定要自己把「回答中」收掉。speakWithClonedVoice 一開頭就報了 true，
@@ -306,11 +309,14 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
       }
 
       preparing = true;
+      const beganAt = Date.now();
+      trace("開始接通串流虛擬人");
       try {
         const [{ LiveAvatarSession, SessionEvent, AgentEventsEnum }, token] =
           await Promise.all([import("@heygen/liveavatar-web-sdk"), fetchToken()]);
 
         if (dead) return;
+        trace("拿到 avatar token", `${Date.now() - beganAt}ms`);
 
         // voiceChat: false ＝ 不要麥克風。
         // 我們的互動在文字層（訪客打字 → RAG），開麥克風只會多要一次權限、
@@ -341,6 +347,7 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
         });
 
         await next.start();
+        trace("session.start() 完成", `${Date.now() - beganAt}ms`);
         if (dead) {
           // prepare 進行中被 destroy 了（切分頁、離開頁面）。
           // 一定要把已經開起來的 session 收掉，否則它會一路計費到伺服器端上限。
@@ -360,16 +367,21 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
 
         session = next;
         prepared = true;
+        trace("串流就緒，她的臉是活的了", `${Date.now() - beganAt}ms`);
 
         // 連線期間送進來的答案在這裡補說。⚠️ 這一段不可以拿掉——
         // 沒有它，每次開頁之後的第一題都是無聲的。
         const queued = pendingSpeech;
         pendingSpeech = null;
-        if (queued) speakNow(next, queued);
+        if (queued) {
+          trace("補說連線期間排隊的答案", `${queued.length} 字`);
+          speakNow(next, queued);
+        }
       } catch (error) {
         // 連不上就沒有人能說那句話了。留著只會在下一次 prepare 成功時
         // 突然講一段舊答案。
         pendingSpeech = null;
+        trace("接通失敗", error instanceof Error ? error.message : String(error), "error");
         hooks.onFatal(error instanceof Error ? error : new Error(String(error)));
       } finally {
         preparing = false;
@@ -392,10 +404,19 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
       // 只在「正在連線」時排隊：prepare() 根本沒被呼叫過的話沒有東西可以等，
       // 排了也只會在很久以後憑空冒出一句話。
       if (!prepared || !session) {
-        if (preparing) pendingSpeech = text;
+        // ⚠️ 這兩條路的差別對診斷是關鍵，所以分開記：
+        // preparing ＝ 還在連，等一下會補說；不 preparing ＝ 根本沒人在連，
+        // 這一句話會永遠消失，而畫面上她只是靜靜地不出聲。
+        if (preparing) {
+          trace("答案比連線先到，先排隊", `${text.length} 字`, "warn");
+          pendingSpeech = text;
+        } else {
+          trace("答案無處可去：串流沒有在連", `${text.length} 字`, "error");
+        }
         return;
       }
 
+      trace("送去讓她開口", `${text.length} 字`);
       speakNow(session, text);
     },
 

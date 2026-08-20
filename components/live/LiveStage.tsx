@@ -12,6 +12,8 @@ import {
   type Recorder,
 } from "@/lib/live/recorder";
 import { METER_BARS, meterBarHeight, smoothLevel } from "@/lib/live/level";
+import TracePanel from "@/components/live/TracePanel";
+import { trace, traceReset } from "@/lib/trace";
 import {
   deriveLiveState,
   avatarStateFor,
@@ -116,15 +118,18 @@ export default function LiveStage() {
     // 預熱 lambda：冷啟動的 3~5 秒靜默是提案現場最尷尬的時刻
     fetch("/api/health").catch(() => {});
 
-    const recorder = createRecorder(
-      () => {
+    const recorder = createRecorder({
+      onAutoStop: () => {
         // 按住不放撞到 30 秒上限。當成放開處理，不要無聲地丟掉他講的話。
         autoStopRef.current();
       },
       // 即時音量。⚠️ 一定要走 smoothLevel（峰值保持 ＋ 衰減），不要直接餵瞬時值：
       // 人講話字與字之間本來就有停頓，瞬時值會掉到底噪，音量計就會塌成一排點。
-      (rms) => setLevel((prev) => smoothLevel(prev, rms))
-    );
+      onLevel: (rms) => setLevel((prev) => smoothLevel(prev, rms)),
+      // 麥克風接上了卻一塊音訊都沒有。⚠️ 這一句要在**訪客還在講**的時候就出現——
+      // 等他講完三秒才發現對著一條死掉的管線，是最浪費人的失敗方式。
+      onNoAudio: () => setNotice(liveCopy.micSilentLive),
+    });
     recorderRef.current = recorder;
     return () => {
       void recorder.dispose();
@@ -155,6 +160,7 @@ export default function LiveStage() {
 
     setPhase("transcribing");
     try {
+      trace("送出音訊到 /api/stt", `${(wav.length / 48_000).toFixed(1)}s`);
       const sttResponse = await withTimeout(
         fetch("/api/stt", {
           method: "POST",
@@ -165,6 +171,7 @@ export default function LiveStage() {
       );
 
       if (stale()) return;
+      trace("/api/stt 回應", `HTTP ${sttResponse.status}`, sttResponse.ok ? "info" : "error");
       if (!sttResponse.ok) {
         setNotice(liveCopy.notHeard);
         return;
@@ -177,9 +184,11 @@ export default function LiveStage() {
       // 原本寫「安靜地什麼都不做」，實際症狀就是使用者回報的「說話沒有反應」——
       // 按了、講了、放開，畫面一個字都沒變，他無法分辨是自己的問題還是網站壞了。
       if (!transcript) {
+        trace("逐字稿是空的", "有聲音但辨識不出內容", "warn");
         setNotice(liveCopy.heardNothing);
         return;
       }
+      trace("逐字稿", transcript);
 
       // 逐字稿一回來就打上去（約 1 秒）。這是整段等待裡最重要的一個回饋：
       // 它證明她真的聽到了，接下來的幾秒沉默才不會像當機。
@@ -200,6 +209,7 @@ export default function LiveStage() {
       );
 
       if (stale()) return;
+      trace("/api/chat 回應", `HTTP ${chatResponse.status}`, chatResponse.ok ? "info" : "error");
       // ⚠️ 護欄 1：非 200 的 body 是錯誤訊息不是答案。
       // 這裡 return 掉，絕不讓它流到下面的 finish()。
       if (!chatResponse.ok || !chatResponse.body) {
@@ -227,10 +237,12 @@ export default function LiveStage() {
       setAnswer(full);
       stageRef.current?.reportActivity();
 
+      trace("答案完成", `${full.length} 字`);
+
       // ⚠️ 護欄 2：送 speakableAnswer，不是 full。
       stageRef.current?.finish(speakableAnswer(full, GUARDED_REPLY));
     } catch (error) {
-      console.error("[live] 這一輪失敗：", error);
+      trace("這一輪失敗", error instanceof Error ? error.message : String(error), "error");
       if (!stale()) setNotice(liveCopy.failed);
     } finally {
       if (!stale()) setPhase("idle");
@@ -266,6 +278,7 @@ export default function LiveStage() {
     // ⚠️ 在這裡就擋下來，不要送去 /api/stt：伺服器只會回一個空字串，
     // 而「沒收到聲音」跟「聽不出內容」對使用者是完全不同的兩件事。
     if (outcome.peak < SILENCE_RMS) {
+      trace("整段都在底噪之下", `峰值 ${outcome.peak.toFixed(5)} < ${SILENCE_RMS}`, "warn");
       setNotice(liveCopy.noSound);
       return;
     }
@@ -282,6 +295,8 @@ export default function LiveStage() {
     // 開新的一輪。⚠️ 一定要在清畫面**之前**遞增，
     // 否則上一輪剛好在這個瞬間 resolve 的話還是會蓋回來。
     turnRef.current += 1;
+    traceReset();
+    trace("按下按鈕");
     setNotice("");
     // ⚠️ 上一輪的問題與答案要一起清掉。留著的話，新的提示會疊在舊問題下面
     // （實測畫面：「你問：00:00」上面掛著「按住不放，講完再放開」），
@@ -301,11 +316,19 @@ export default function LiveStage() {
     // 所以真正讓她出聲的是這裡。
     void stageRef.current?.prepare({ unmute: true });
 
+    // 🔴 立刻切成「錄音中」，**不要**等 start() resolve。
+    //
+    // start() 裡面有 getUserMedia（一般 100~300ms，第一次要等使用者按允許），
+    // 前一版還在裡面等第一塊音訊最多 700ms。那段時間按鈕仍寫著「按住說話」、
+    // 音量計不出現——使用者按下去看到畫面完全沒動，結論只會是「壞了」，
+    // 然後放開再按一次，於是連正常的那一輪也被自己中斷。
+    // 麥克風確實正在開，畫面就該這樣說；真的開不起來下面會改回來並說明原因。
+    setRecording(true);
     try {
       await recorderRef.current?.start();
-      setRecording(true);
     } catch (error) {
       setRecording(false);
+      trace("麥克風開不起來", String(error), "error");
       if (error instanceof MicrophoneError) {
         setNotice(
           error.reason === "denied"
@@ -364,6 +387,9 @@ export default function LiveStage() {
         autoStart
         poster="/avatar-poster.jpg"
       />
+
+      {/* 加了 ?debug=1 才會出現。平常一個像素都不佔。 */}
+      <TracePanel />
 
       {/* 頂部：身分標記。這一頁沒有 Nav，所以必須自己放。 */}
       <header className="absolute inset-x-0 top-0 z-10 flex items-center gap-3 bg-gradient-to-b from-ink/85 to-transparent px-4 pb-10 pt-4 sm:px-6">

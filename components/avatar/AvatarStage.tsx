@@ -13,6 +13,7 @@ import DigitalAvatar from "@/components/avatar/DigitalAvatar";
 import { createAvatarDriver, resolveProvider } from "@/lib/avatar";
 import type { AvatarDriver, AvatarProvider, AvatarState } from "@/lib/avatar";
 import { createIdleTimer } from "@/lib/idle-timer";
+import { trace } from "@/lib/trace";
 
 /**
  * VideoAvatar 只在瀏覽器端載入。Phase 2 之後這條路會把 livekit / webrtc-adapter
@@ -164,6 +165,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     driverRef.current = null;
     sessionLimitRef.current = null;
     await driver.destroy();
+    trace("串流被收掉", "閒置、切到背景、或撞到單次上限", "warn");
     speakingCb.current(false);
     // 串流沒了還留著上一輪的字幕，畫面會停在訪客無法理解的中間態
     teardownCb.current?.();
@@ -380,7 +382,11 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
       for (let i = 0; i < 40 && !cancelled && !videoRef.current; i++) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      if (cancelled || autoStartedRef.current || !videoRef.current) return;
+      if (cancelled || autoStartedRef.current) return;
+      if (!videoRef.current) {
+        trace("自動連線放棄：4 秒內等不到 <video>", undefined, "error");
+        return;
+      }
       autoStartedRef.current = true;
       void prepareRef.current();
     })();
@@ -400,7 +406,19 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
       },
       finish: (fullText) => {
         idleRef.current?.reportActivity();
-        driverRef.current?.finish(fullText);
+        const driver = driverRef.current;
+        if (!driver) {
+          // 🔴 沒有 driver 就沒有人能說這句話。**不可以**靜靜地丟掉。
+          //
+          // 這條路真的走得到：onFatal（含斷線）會把 driverRef 清成 null 並降級成
+          // monogram，而那之後送進來的每一則答案都會消失。畫面上的樣子是
+          // 「文字出來了、她一個字都沒說、沒有任何解釋」——正好就是使用者
+          // 一直在回報的症狀，而且從畫面上完全無法跟麥克風的問題區分。
+          trace("答案沒有 driver 可送，這一段不會有聲音", `${fullText.length} 字`, "error");
+          speechFailedCb.current?.();
+          return;
+        }
+        driver.finish(fullText);
       },
       stop: () => driverRef.current?.stop(),
       reportActivity: () => idleRef.current?.reportActivity(),

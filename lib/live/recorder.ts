@@ -1,4 +1,5 @@
 import { chunksToWav } from "./wav";
+import { trace } from "@/lib/trace";
 
 /**
  * 按住說話的錄音器。瀏覽器端。
@@ -106,11 +107,17 @@ export interface RecordingResult {
 const NO_AUDIO_HOLD_MS = 500;
 
 /**
- * 開始收音之後，等第一塊音訊最多這麼久。
+ * 接上音訊圖之後，等第一塊音訊多久才判定這條管線沒在跑。
  *
- * worklet 每 4096 個取樣送一塊，48kHz 下約 85ms，正常情況遠遠不到。
- * 等不到就代表 AudioContext 根本沒在 render——與其讓使用者對著一個死掉的
- * 錄音管線講完三秒才發現，不如當場失敗、當場說。
+ * 🔴 **這個等待不可以擋在 start() 的路徑上。**
+ *
+ * 前一版把它寫成 `if (!(await buildGraph())) ...`，於是每一次按下說話都要先
+ * 賭 700ms 內收得到音訊，收不到就整支 start() 丟 MicrophoneError("unavailable")，
+ * 畫面顯示「找不到可用的麥克風」——一句既嚇人又指錯方向的話。
+ * 藍牙耳機接上來的頭幾百毫秒本來就沒有取樣，那不是「找不到麥克風」。
+ *
+ * 現在改成背景看門狗：照常開始錄音，收不到才在**訪客還在講話的時候**提醒他，
+ * 而不是先把他擋在門外。真正的判定仍然在放開時由 classifyRecording 做。
  */
 const FIRST_CHUNK_TIMEOUT_MS = 700;
 
@@ -169,6 +176,20 @@ export interface Recorder {
   dispose(): Promise<void>;
 }
 
+export interface RecorderHooks {
+  /** 按住撞到 30 秒上限，自動收手 */
+  onAutoStop?: () => void;
+  /** 錄音期間持續回報音量（0~1）。讓 UI 可以顯示「我聽到你了」。 */
+  onLevel?: (rms: number) => void;
+  /**
+   * 接上音訊圖、重接一次之後仍然一塊音訊都沒有。
+   *
+   * ⚠️ 這支在**錄音進行中**就會被呼叫，目的是讓訪客不要對著一條死掉的管線
+   * 講完三秒才發現。它不中止錄音——真正的判定仍然在放開時做。
+   */
+  onNoAudio?: () => void;
+}
+
 function isSupported(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -178,11 +199,7 @@ function isSupported(): boolean {
   );
 }
 
-export function createRecorder(
-  onAutoStop?: () => void,
-  /** 錄音期間持續回報音量（0~1）。讓 UI 可以顯示「我聽到你了」。 */
-  onLevel?: (rms: number) => void
-): Recorder {
+export function createRecorder(hooks: RecorderHooks = {}): Recorder {
   let stream: MediaStream | null = null;
   let context: AudioContext | null = null;
   let node: AudioWorkletNode | null = null;
@@ -192,8 +209,17 @@ export function createRecorder(
   let sampleRate = 48_000;
   let active = false;
   let capTimer: ReturnType<typeof setTimeout> | null = null;
-  /** 這一次按下去的時間。用來分辨「點太快」與「按住了但管線沒在跑」。 */
+  let watchTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * 這一次**按下去**的時間（不是音訊圖接好的時間）。
+   *
+   * ⚠️ 要用按下的那一刻。用「接好之後」的話，getUserMedia 花掉的時間就從
+   * heldMs 裡消失了，而 classifyRecording 正是靠 heldMs 分辨
+   * 「點太快」與「按住了但管線沒在跑」——少算就會把後者誤判成前者。
+   */
   let startedAt = 0;
+  /** 第一塊音訊進來的時間（距離 startedAt 的毫秒）。0 ＝ 還沒收到。 */
+  let firstChunkAt = 0;
   /** 哪些 AudioContext 已經掛過 worklet。同一個 context 掛第二次會撞名。 */
   const moduleLoadedFor = new WeakSet<AudioContext>();
 
@@ -207,11 +233,33 @@ export function createRecorder(
   /** ⚠️ 防護二：start() 還在跑的時候再按一次，不可以開出第二條音軌。 */
   let starting: Promise<void> | null = null;
 
-  function clearCap() {
+  function clearTimers() {
     if (capTimer !== null) {
       clearTimeout(capTimer);
       capTimer = null;
     }
+    if (watchTimer !== null) {
+      clearTimeout(watchTimer);
+      watchTimer = null;
+    }
+  }
+
+  /**
+   * 只拆音訊圖，**保留 stream 與麥克風權限**。
+   *
+   * 🔴 這支跟 teardown() 分開是為了修一個真的 bug。前一版在「收不到音訊、
+   * 回收 AudioContext 重接一次」那條路上呼叫了 teardown()，而 teardown()
+   * 會 `stream.getTracks().forEach(stop)` 並把 stream 設成 null——
+   * 於是緊接著的重接第一行 `if (!stream) return false` 直接失敗。
+   * 那個「重試一次」從來沒有真的執行過，每一次都是丟出
+   * MicrophoneError("unavailable")，畫面顯示「找不到可用的麥克風」。
+   */
+  function releaseGraph() {
+    node?.port.close();
+    node?.disconnect();
+    node = null;
+    source?.disconnect();
+    source = null;
   }
 
   /**
@@ -219,14 +267,10 @@ export function createRecorder(
    * 只丟掉 MediaStream 的參照不會關掉麥克風，瀏覽器的錄音指示燈會一直亮著。
    */
   function teardown() {
-    clearCap();
+    clearTimers();
+    releaseGraph();
     stream?.getTracks().forEach((track) => track.stop());
     stream = null;
-    node?.port.close();
-    node?.disconnect();
-    node = null;
-    source?.disconnect();
-    source = null;
     active = false;
 
     // ⚠️ **不要**在這裡關掉 AudioContext。
@@ -237,12 +281,15 @@ export function createRecorder(
     //（實測：state 停在 suspended、currentTime 完全不前進、process() 一次都不會被呼叫）。
     // 那個修法本身會製造它想解決的症狀。
     //
-    // 現在的作法：重用 context，但在 buildGraph() 裡確認它**真的收得到音訊**，
-    // 收不到才回收重建。判斷用事實（第一塊有沒有進來），不用猜的。
+    // 現在的作法：重用 context，由看門狗確認它**真的收得到音訊**，收不到才回收重建。
+    // 判斷用事實（第一塊有沒有進來），不用猜的。
   }
 
   async function doStart(): Promise<void> {
     if (!isSupported()) throw new MicrophoneError("unsupported");
+
+    // ⚠️ 時間原點在這裡，不在音訊圖接好之後。見 startedAt 的說明。
+    const pressedAt = Date.now();
 
     let captured: MediaStream;
     try {
@@ -255,11 +302,13 @@ export function createRecorder(
       });
     } catch (error) {
       const name = (error as DOMException)?.name;
+      trace("麥克風被拒絕", name ?? "未知錯誤", "error");
       if (name === "NotAllowedError" || name === "SecurityError") {
         throw new MicrophoneError("denied", error);
       }
       throw new MicrophoneError("unavailable", error);
     }
+    trace("拿到麥克風", `${Date.now() - pressedAt}ms`);
 
     // 見防護一：這期間使用者已經放開了，收到的 stream 必須立刻關掉
     if (abortPending) {
@@ -268,20 +317,13 @@ export function createRecorder(
     }
 
     stream = captured;
+    chunks = [];
+    peak = 0;
+    firstChunkAt = 0;
 
-    // ⚠️ 接好之後要**確認真的收得到音訊**才算成功。第一次收不到就把 context 丟掉
-    // 重建一次，再收不到就當場報錯——不要讓使用者對著死掉的管線講完三秒才發現。
-    if (!(await buildGraph())) {
-      console.warn("[recorder] 收不到音訊，回收 AudioContext 重建一次");
+    if (!(await connectGraph())) {
       teardown();
-      const dead = context;
-      context = null;
-      void dead?.close().catch(() => {});
-      if (abortPending) return;
-      if (!(await buildGraph())) {
-        teardown();
-        throw new MicrophoneError("unavailable");
-      }
+      throw new MicrophoneError("unavailable");
     }
 
     if (abortPending) {
@@ -289,22 +331,60 @@ export function createRecorder(
       return;
     }
 
-    startedAt = Date.now();
+    startedAt = pressedAt;
     active = true;
+    trace("開始錄音", `${Date.now() - pressedAt}ms`);
 
     // 按住不放的保險。伺服器那邊也有 30 秒上限，這裡先收手是為了不要白錄。
-    clearCap();
+    clearTimers();
     capTimer = setTimeout(() => {
       capTimer = null;
-      if (active) onAutoStop?.();
+      if (active) hooks.onAutoStop?.();
     }, MAX_RECORDING_SECONDS * 1000);
+
+    armWatchdog();
   }
 
   /**
-   * 建 AudioContext ＋ 掛 worklet ＋ 接上音訊圖，並等第一塊音訊進來。
-   * 回傳「這條管線活著嗎」。
+   * 收不到音訊時的背景看門狗。
+   *
+   * ⚠️ 它**不擋**錄音，只在確定收不到之後提醒訪客。理由見 FIRST_CHUNK_TIMEOUT_MS。
+   * 重接那一次只拆音訊圖（releaseGraph）不動 stream，否則重接必定失敗。
    */
-  async function buildGraph(): Promise<boolean> {
+  function armWatchdog() {
+    watchTimer = setTimeout(() => {
+      watchTimer = null;
+      if (!active || firstChunkAt) return;
+
+      trace("第一塊音訊逾時，回收 AudioContext 重接", `${FIRST_CHUNK_TIMEOUT_MS}ms`, "warn");
+      releaseGraph();
+      const stale = context;
+      context = null;
+      void stale?.close().catch(() => {});
+
+      void (async () => {
+        if (!active || !(await connectGraph())) {
+          if (active) {
+            trace("重接失敗，這條錄音管線是死的", undefined, "error");
+            hooks.onNoAudio?.();
+          }
+          return;
+        }
+        watchTimer = setTimeout(() => {
+          watchTimer = null;
+          if (!active || firstChunkAt) return;
+          trace("重接之後仍然收不到音訊", undefined, "error");
+          hooks.onNoAudio?.();
+        }, FIRST_CHUNK_TIMEOUT_MS);
+      })();
+    }, FIRST_CHUNK_TIMEOUT_MS);
+  }
+
+  /**
+   * 建（或重用）AudioContext ＋ 掛 worklet ＋ 接上音訊圖。
+   * 回傳「有沒有接起來」——注意這**不代表**收得到音訊，那是看門狗的事。
+   */
+  async function connectGraph(): Promise<boolean> {
     if (!stream) return false;
     context = context ?? new AudioContext();
 
@@ -317,7 +397,7 @@ export function createRecorder(
         new Promise<boolean>((r) => setTimeout(() => r(false), RESUME_TIMEOUT_MS)),
       ]);
       if (!resumed) {
-        console.warn("[recorder] AudioContext.resume() 逾時——多半是沒有使用者手勢");
+        trace("AudioContext.resume() 逾時", "多半是沒有使用者手勢", "error");
         return false;
       }
     }
@@ -338,20 +418,13 @@ export function createRecorder(
     }
     if (abortPending) return false;
 
-    chunks = [];
-    peak = 0;
-
-    let announceFirst: (() => void) | null = null;
-    const gotFirst = new Promise<boolean>((resolve) => {
-      announceFirst = () => resolve(true);
-      setTimeout(() => resolve(false), FIRST_CHUNK_TIMEOUT_MS);
-    });
-
     source = context.createMediaStreamSource(stream);
     node = new AudioWorkletNode(context, "recorder-processor");
     node.port.onmessage = (event: MessageEvent<Float32Array>) => {
-      announceFirst?.();
-      announceFirst = null;
+      if (!firstChunkAt) {
+        firstChunkAt = Date.now() - (startedAt || Date.now());
+        trace("第一塊音訊", `${firstChunkAt}ms`);
+      }
       chunks.push(event.data);
       // 順手算這一塊的 RMS：既給 UI 即時顯示，也累積成整段的峰值。
       // 沒有這個數字，「麥克風壞掉」跟「房間很安靜」在畫面上長得一模一樣。
@@ -359,13 +432,13 @@ export function createRecorder(
       for (let i = 0; i < event.data.length; i++) sum += event.data[i] * event.data[i];
       const rms = Math.sqrt(sum / event.data.length);
       if (rms > peak) peak = rms;
-      onLevel?.(rms);
+      hooks.onLevel?.(rms);
     };
     // ⚠️ 不要接到 destination——那會把訪客自己的聲音播回喇叭，形成回授。
     // AudioWorkletNode 不接輸出也照樣會收到 process() 呼叫。
     source.connect(node);
 
-    return gotFirst;
+    return true;
   }
 
   return {
@@ -390,6 +463,7 @@ export function createRecorder(
       }
       if (!active) {
         teardown();
+        trace("放開時錄音還沒開始", "aborted", "warn");
         return { kind: "aborted" };
       }
 
@@ -399,7 +473,7 @@ export function createRecorder(
       const heldMs = Date.now() - startedAt;
       teardown();
       chunks = [];
-      onLevel?.(0);
+      hooks.onLevel?.(0);
 
       // ⚠️ 一塊都沒收到，而且按住夠久 → 是錄音管線死掉，不是誤觸。
       // 這兩件事對使用者的意義完全相反：一個要他再按一次，
@@ -411,14 +485,13 @@ export function createRecorder(
         heldMs,
         seconds,
       });
+      trace(
+        "放開",
+        `按住 ${heldMs}ms、${captured.length} 塊、${seconds.toFixed(2)}s、峰值 ${capturedPeak.toFixed(4)} → ${verdict}`,
+        verdict === "ok" ? "info" : "warn"
+      );
 
-      if (verdict === "no-audio") {
-        console.error(
-          `[recorder] 按住了 ${heldMs}ms 卻一塊音訊都沒收到——` +
-            "AudioContext 或 AudioWorklet 沒在跑（睡眠喚醒／換音訊裝置／被別的分頁佔用）"
-        );
-        return { kind: "no-audio", heldMs };
-      }
+      if (verdict === "no-audio") return { kind: "no-audio", heldMs };
       if (verdict === "too-short") return { kind: "too-short", seconds };
 
       return { kind: "ok", wav: chunksToWav(captured, rate), peak: capturedPeak, seconds };
@@ -427,7 +500,6 @@ export function createRecorder(
     async dispose() {
       abortPending = true;
       if (starting) await starting.catch(() => {});
-      // teardown() 已經把 context 關掉了，這裡不用再關一次
       teardown();
       chunks = [];
     },
