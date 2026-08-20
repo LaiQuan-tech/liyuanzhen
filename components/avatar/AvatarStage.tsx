@@ -352,16 +352,43 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
   }, [ensureDriver, teardown, videoReady]);
 
   /**
-   * 自動連線。⚠️ 一個 mount 只做一次，見 props 的 autoStart 說明。
-   * 用 ref 而不是靠 effect 的 deps：`prepare` 的 deps 含 videoReady，
-   * 接通之後它會變成新的函式，沒有這道旗標就會再觸發一次。
+   * 自動連線。
+   *
+   * ⚠️ **一定要等 `<video>` 出現才能呼叫 prepare()。**
+   * `VideoAvatar` 走 next/dynamic，元件掛載的當下那個 <video> 還不存在，
+   * 於是 prepare() 會撞到「driver 需要 <video> 但 videoRef 是空的」那道護欄
+   * 直接中止——而且旗標已經立起來，永遠不會重試。
+   * 實測就是這樣：poster 出得來、`/api/avatar-token` 一次都沒發。
+   * 那道護欄是對的（沒有 video 就開計費 session 等於對著黑畫面燒錢），
+   * 錯的是觸發時機。
+   *
+   * ⚠️ 一個 mount 只做一次。閒置被收掉之後**不會**自動重連——
+   * 會的話一個沒人看的分頁可以無上限地一直重連燒錢。
+   *
+   * ⚠️ deps 只放 `autoStart`。`prepare` 的 deps 含 videoReady，接通之後它會變成
+   * 新的函式；把它放進 deps 會讓這個 effect 重跑並中斷等待中的輪詢，所以走 ref。
    */
   const autoStartedRef = useRef(false);
+  const prepareRef = useRef(prepare);
+  prepareRef.current = prepare;
   useEffect(() => {
-    if (!autoStart || autoStartedRef.current) return;
-    autoStartedRef.current = true;
-    void prepare();
-  }, [autoStart, prepare]);
+    if (!autoStart) return;
+    let cancelled = false;
+
+    void (async () => {
+      // 最多等 4 秒。等不到就放棄——使用者按下去時 videoRef 一定已經在了。
+      for (let i = 0; i < 40 && !cancelled && !videoRef.current; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (cancelled || autoStartedRef.current || !videoRef.current) return;
+      autoStartedRef.current = true;
+      void prepareRef.current();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [autoStart]);
 
   useImperativeHandle(
     ref,
