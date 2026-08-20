@@ -426,8 +426,23 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
                 這時候放一張靜態臉等於騙訪客有數位人
           */}
           {poster && needsVideo ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={poster} alt="" className="h-full w-full object-cover" />
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={poster} alt="" className="h-full w-full object-cover" />
+              {/*
+                🔴 poster 階段也要有浮水印。
+                這張本身是真實照片（不是 AI 生成的一格），照理不需要標記——
+                首頁那張就沒有。但 /live 整頁就是數位人的舞台，一張佔滿螢幕的臉
+                被錄下來轉傳時，看的人不會去分辨那一格是照片還是算圖。
+                揭露這件事寧可從嚴：少標一次的代價，比多標一次大得多。
+
+                ⚠️ 樣式與 top-16 要跟 VideoAvatar 那份一致，否則兩層交叉淡入時
+                浮水印會在畫面上跳一下。改一邊記得改另一邊。
+              */}
+              <span className="pointer-events-none absolute right-3 top-16 rounded-full bg-ink/80 px-3 py-1 text-[11px] font-bold tracking-wide text-white backdrop-blur-sm">
+                AI 生成影像
+              </span>
+            </>
           ) : (
             <div className="flex h-full w-full items-center justify-center">
               <DigitalAvatar state={state} size="lg" showLabel={false} />
