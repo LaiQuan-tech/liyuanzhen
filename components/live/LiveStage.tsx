@@ -225,24 +225,31 @@ export default function LiveStage() {
     if (!recorder) return;
 
     setRecording(false);
-    const result = await recorder.stop();
+    const outcome = await recorder.stop();
 
-    // 太短 ＝ 誤觸。給一句提示就好，不要當成錯誤。
-    if (!result) {
+    // ⚠️ 這一支要**第一個**判斷，而且必須跟 tooShort 分開。
+    // 按住夠久卻一塊音訊都沒收到 ＝ 錄音管線死掉，不是誤觸。
+    // 合在一起的那一版真的上線過：使用者按住講了一秒，畫面回他「按住不放」。
+    if (outcome.kind === "no-audio") {
+      setNotice(liveCopy.micDead);
+      return;
+    }
+
+    // 誤觸，或放得比 getUserMedia 還快。給一句提示就好，不要當成錯誤。
+    if (outcome.kind !== "ok") {
       setNotice(liveCopy.tooShort);
       return;
     }
 
     // 有錄到但整段都在底噪之下——麥克風沒開、被靜音、或講得太小聲。
     // ⚠️ 在這裡就擋下來，不要送去 /api/stt：伺服器只會回一個空字串，
-    // 而「沒收到聲音」跟「聽不出內容」對使用者是完全不同的兩件事，
-    // 前者要他去檢查麥克風，後者只要再講一次。
-    if (result.peak < SILENCE_RMS) {
+    // 而「沒收到聲音」跟「聽不出內容」對使用者是完全不同的兩件事。
+    if (outcome.peak < SILENCE_RMS) {
       setNotice(liveCopy.noSound);
       return;
     }
 
-    await runTurn(result.wav);
+    await runTurn(outcome.wav);
   }, [runTurn]);
 
   autoStopRef.current = () => void release();

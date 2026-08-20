@@ -115,7 +115,14 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
   /** 伺服器說這個 session 能活多久。null ＝ 還沒拿到 token，用保底值。 */
   const sessionLimitRef = useRef<number | null>(null);
 
-  /** 收掉會計費的 session，但保留 driver 物件（下次手勢可以重新 prepare） */
+  /**
+   * 收掉會計費的 session。
+   *
+   * ⚠️ driver 物件在這裡是**丟掉**的（destroy 之後它永久失效），
+   * 下一次手勢由 `ensureDriver()` 重新建一個。原本的註解寫「保留 driver 物件」，
+   * 但程式其實是清成 null，而 driver 只在掛載時建立一次——
+   * 那就是「切一次分頁之後影像再也回不來」的成因。
+   */
   const teardown = useCallback(async () => {
     idleRef.current?.stop();
     if (capRef.current) {
@@ -135,39 +142,65 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     teardownCb.current?.();
   }, []);
 
-  // driver 生命週期。⚠️ 不在這裡 prepare()——那必須由使用者手勢觸發，
-  // 而 reactStrictMode 會讓 effect 跑兩次，等於開兩個計費 session。
-  useEffect(() => {
-    let cancelled = false;
+  /**
+   * 元件已經卸載。⚠️ 用 ref 不用區域變數——`ensureDriver()` 會在 effect 之外
+   * （使用者按下按鈕時）被呼叫，區域變數在那個時候看不到。
+   */
+  const unmountedRef = useRef(false);
+  /**
+   * 正在建立的那一次。⚠️ 這道 guard 不可以拿掉：
+   * StrictMode 會讓 effect 跑兩次，少了它就是兩個計費 session。
+   */
+  const creatingRef = useRef<Promise<AvatarDriver | null> | null>(null);
 
-    void (async () => {
-      const driver = await createAvatarDriver({
-        onSpeakingChange: (s) => {
-          if (!cancelled) speakingCb.current(s);
-        },
-        onSpeechFailed: () => {
-          if (!cancelled) speechFailedCb.current?.();
-        },
-        onSessionLimit: (seconds) => {
-          // 只記下來，武裝硬上限是 prepare() 的事——這個回呼會在
-          // fetchToken() 期間觸發，那時候計時器還沒開始
-          if (!cancelled) sessionLimitRef.current = seconds;
-        },
-        onFatal: (error) => {
-          if (cancelled) return;
-          console.error("[avatar] driver 失效，降級為 monogram：", error);
-          // 降級：使用者失去的是那張臉，不是整個聊天
-          void driverRef.current?.destroy();
-          driverRef.current = null;
-          preparingRef.current = null;
-          setVideoReady(false);
-          setProvider("monogram");
-        },
-      }, providerOverride);
+  /**
+   * 拿到一個可用的 driver，沒有就建一個。冪等。
+   *
+   * ⚠️ 這裡從 mount-only 的 effect 抽出來，是為了修一個真實的 bug：
+   * `teardown()` 會把 driverRef 清成 null 並 `destroy()`（destroy 之後那個物件
+   * 永久失效），而 driver 原本只在掛載時建立一次。結果是**任何一次 teardown
+   * 之後影像就再也回不來**——而 teardown 會在切到別的分頁時觸發。
+   * 它自己的註解與畫面上的「按住說話就可以重新開始」都是做不到的承諾。
+   *
+   * ⚠️ 這也表示 onFatal（含 SESSION_DISCONNECTED）之後，下一次按住說話會重新
+   * 建立 driver、重新開一個計費 session。那是刻意的：斷線本來就該能重來，
+   * 而且它由使用者的手勢觸發，帳本那三道閘門仍然守著。
+   */
+  const ensureDriver = useCallback(async (): Promise<AvatarDriver | null> => {
+    if (driverRef.current) return driverRef.current;
+    if (creatingRef.current) return creatingRef.current;
 
-      if (cancelled) {
+    const run = (async () => {
+      const driver = await createAvatarDriver(
+        {
+          onSpeakingChange: (s) => {
+            if (!unmountedRef.current) speakingCb.current(s);
+          },
+          onSpeechFailed: () => {
+            if (!unmountedRef.current) speechFailedCb.current?.();
+          },
+          onSessionLimit: (seconds) => {
+            // 只記下來，武裝硬上限是 prepare() 的事——這個回呼會在
+            // fetchToken() 期間觸發，那時候計時器還沒開始
+            if (!unmountedRef.current) sessionLimitRef.current = seconds;
+          },
+          onFatal: (error) => {
+            if (unmountedRef.current) return;
+            console.error("[avatar] driver 失效，降級為 monogram：", error);
+            // 降級：使用者失去的是那張臉，不是整個聊天
+            void driverRef.current?.destroy();
+            driverRef.current = null;
+            preparingRef.current = null;
+            setVideoReady(false);
+            setProvider("monogram");
+          },
+        },
+        providerOverride
+      );
+
+      if (unmountedRef.current) {
         void driver.destroy();
-        return;
+        return null;
       }
       driverRef.current = driver;
       setProvider(driver.provider);
@@ -180,17 +213,30 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
         // monogram 不計費也不需要手勢，直接備好；
         // 它的可用性**取決於裝置**（沒有中文語音就是 false），必須問過才知道
         await driver.prepare(null);
-        if (!cancelled) availableCb.current?.(driver.audioAvailable);
+        if (!unmountedRef.current) availableCb.current?.(driver.audioAvailable);
       }
-    })();
+      return driver;
+    })().finally(() => {
+      creatingRef.current = null;
+    });
+
+    creatingRef.current = run;
+    return run;
+  }, [providerOverride]);
+
+  // driver 生命週期。⚠️ 不在這裡 prepare()——那必須由使用者手勢觸發，
+  // 而 reactStrictMode 會讓 effect 跑兩次，等於開兩個計費 session。
+  useEffect(() => {
+    unmountedRef.current = false;
+    void ensureDriver();
 
     return () => {
-      cancelled = true;
+      unmountedRef.current = true;
       const driver = driverRef.current;
       driverRef.current = null;
       void driver?.destroy();
     };
-  }, []);
+  }, [ensureDriver]);
 
   // 分頁被切到背景還在燒串流，是網站跟展場 kiosk 最大的成本差異。
   // pagehide 而不是 unload——bfcache 之下 unload 不保證會跑。
@@ -211,15 +257,27 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
   }, [needsVideo, teardown]);
 
   const prepare = useCallback(async () => {
-    const driver = driverRef.current;
-    if (!driver) return;
-    // 兩道 guard：已經備好了、以及正在備。少了第二道就有 double-spend race。
+    // 正在備就不要再備一次。少了它就有 double-spend race。
     if (preparingRef.current) return preparingRef.current;
-    if (driver.metered && videoReady) return;
+
+    // ⚠️ 解除靜音必須在手勢的**同步**段落做完，await 之後就不算手勢了。
+    // 所以這一段一定要在 ensureDriver() 之前，不可以往下搬進 run。
+    const video = videoRef.current;
+    if (video) {
+      video.muted = false;
+      video.play().catch(() => {
+        // 靜默失敗看起來就跟壞掉一樣，所以要留痕跡
+        console.warn("[avatar] 自動播放被擋，需要使用者再點一次");
+      });
+    }
 
     const run = (async () => {
-      // 解除靜音必須在手勢的**同步**段落做完，await 之後就不算手勢了
-      const video = videoRef.current;
+      // ⚠️ driver 可能是 null——teardown 之後我們刻意把它丟掉。
+      // 這裡重新建一個，否則切一次分頁影像就再也回不來。
+      const driver = driverRef.current ?? (await ensureDriver());
+      if (!driver) return;
+      // 已經備好了就不用再開一個計費 session
+      if (driver.metered && videoReady) return;
 
       if (driver.needsVideo && !video) {
         // 絕對不能靜默放行：計費的 session 會照樣開起來，然後對著一個
@@ -229,14 +287,6 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
             "多半是 ref 沒穿過 next/dynamic 的包裝。中止 prepare，不開 session。"
         );
         return;
-      }
-
-      if (video) {
-        video.muted = false;
-        video.play().catch(() => {
-          // 靜默失敗看起來就跟壞掉一樣，所以要留痕跡
-          console.warn("[avatar] 自動播放被擋，需要使用者再點一次");
-        });
       }
 
       await driver.prepare(video ?? null);
@@ -262,7 +312,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     } finally {
       if (preparingRef.current === run) preparingRef.current = null;
     }
-  }, [teardown, videoReady]);
+  }, [ensureDriver, teardown, videoReady]);
 
   useImperativeHandle(
     ref,

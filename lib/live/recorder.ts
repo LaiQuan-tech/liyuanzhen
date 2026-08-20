@@ -97,17 +97,62 @@ export interface RecordingResult {
   seconds: number;
 }
 
+/**
+ * 按住超過這個時間卻連一塊音訊都沒收到，就不是誤觸，是錄音管線壞了。
+ *
+ * worklet 每 4096 個取樣送一塊，48kHz 下約 85ms。所以 0.5 秒之內收不到塊
+ * 還可能只是點太快；超過就一定有問題。
+ */
+const NO_AUDIO_HOLD_MS = 500;
+
+/**
+ * 一次錄音的結局。
+ *
+ * ⚠️ 刻意不是 `RecordingResult | null`。舊版把「誤觸」與「一塊都沒收到」
+ * 通通回 null，呼叫端只能一律顯示「按住不放，講完再放開」——
+ * 使用者明明按住講了一秒，卻被指責按太快，而真正的問題（麥克風管線死掉）
+ * 一個字都沒提到。實際發生過，這個型別就是為了讓它不可能再發生。
+ */
+/**
+ * 判斷這一次錄音該算成哪一種結局。純函式，所以測得到——
+ * `stop()` 本身要 AudioContext 與 getUserMedia，在 node 環境跑不起來。
+ *
+ * ⚠️ 這裡是整個「按住沒反應」誤導的核心。三種情況要分開：
+ *   點一下就放（chunkCount 0、按住很短）………… too-short，安靜帶過
+ *   按住講了一秒卻零塊（chunkCount 0、按住夠久）… no-audio，管線死了，要講清楚
+ *   有收到但取樣不足 0.2 秒 …………………………… too-short
+ */
+export function classifyRecording(input: {
+  chunkCount: number;
+  heldMs: number;
+  seconds: number;
+}): "ok" | "too-short" | "no-audio" {
+  if (input.chunkCount === 0) {
+    return input.heldMs >= NO_AUDIO_HOLD_MS ? "no-audio" : "too-short";
+  }
+  return input.seconds < MIN_RECORDING_SECONDS ? "too-short" : "ok";
+}
+
+export type RecordingOutcome =
+  | ({ kind: "ok" } & RecordingResult)
+  /** 誤觸。太短，安靜帶過就好 */
+  | { kind: "too-short"; seconds: number }
+  /** 按住夠久卻一塊音訊都沒收到——AudioContext 或 worklet 沒在跑 */
+  | { kind: "no-audio"; heldMs: number }
+  /** getUserMedia 還沒 resolve 就放開了 */
+  | { kind: "aborted" };
+
 export interface Recorder {
   readonly recording: boolean;
   /** ⚠️ 必須在使用者手勢的呼叫堆疊裡呼叫。失敗時丟 MicrophoneError。 */
   start(): Promise<void>;
   /**
-   * 停止並回傳結果。錄太短（< MIN_RECORDING_SECONDS）回 null——那是誤觸。
+   * 停止並回傳結局。四種結局要分開，見 RecordingOutcome 的說明。
    *
-   * ⚠️ 全靜音**不**回 null。呼叫端需要分辨「誤觸」與「真的按住講了話但沒收到聲音」，
-   * 後者必須給使用者回饋。用 peak 判斷，不要在這裡就吞掉。
+   * ⚠️ 全靜音**不**算失敗。呼叫端需要分辨「誤觸」「管線死掉」「說了但很小聲」，
+   * 最後一種用 peak 判斷，不要在這裡就吞掉。
    */
-  stop(): Promise<RecordingResult | null>;
+  stop(): Promise<RecordingOutcome>;
   /** 釋放所有資源。冪等。 */
   dispose(): Promise<void>;
 }
@@ -135,6 +180,8 @@ export function createRecorder(
   let sampleRate = 48_000;
   let active = false;
   let capTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 這一次按下去的時間。用來分辨「點太快」與「按住了但管線沒在跑」。 */
+  let startedAt = 0;
 
   /**
    * ⚠️ 防護一：使用者點超快，`pointerup` 在 `getUserMedia` 還沒 resolve 就到了。
@@ -167,6 +214,19 @@ export function createRecorder(
     source?.disconnect();
     source = null;
     active = false;
+
+    // ⚠️ AudioContext 每次用完就關，下一次重開。
+    //
+    // 舊版是 `context = context ?? new AudioContext()`，建立一次就終生重用。
+    // 症狀：睡眠喚醒、換音訊裝置、或瀏覽器把它暫停之後，它會停止 render，
+    // `process()` 再也不會被呼叫——於是每一次按住說話都收到零塊音訊，
+    // 音量計整排全平，而使用者只看到「按住不放，講完再放開」。
+    //
+    // 每次重開也順帶消掉另一個隱憂：同一個 context 上重複 addModule 會讓
+    // `registerProcessor("recorder-processor")` 撞名。
+    const closing = context;
+    context = null;
+    void closing?.close().catch(() => {});
   }
 
   async function doStart(): Promise<void> {
@@ -196,7 +256,8 @@ export function createRecorder(
     }
 
     stream = captured;
-    context = context ?? new AudioContext();
+    // 見 teardown()：每次都是新的 context，不重用
+    context = new AudioContext();
     // 自動播放政策可能讓 context 一開始是 suspended
     if (context.state === "suspended") await context.resume();
     sampleRate = context.sampleRate;
@@ -228,6 +289,7 @@ export function createRecorder(
       onLevel?.(rms);
     };
     source.connect(node);
+    startedAt = Date.now();
     // ⚠️ 不要接到 destination——那會把訪客自己的聲音播回喇叭，形成回授。
     // AudioWorkletNode 不接輸出也照樣會收到 process() 呼叫。
     active = true;
@@ -254,7 +316,7 @@ export function createRecorder(
       await starting;
     },
 
-    async stop() {
+    async stop(): Promise<RecordingOutcome> {
       // 見防護一：start() 還沒 resolve 就放開了
       if (starting) {
         abortPending = true;
@@ -262,33 +324,46 @@ export function createRecorder(
       }
       if (!active) {
         teardown();
-        return null;
+        return { kind: "aborted" };
       }
 
       const captured = chunks;
       const rate = sampleRate;
       const capturedPeak = peak;
+      const heldMs = Date.now() - startedAt;
       teardown();
       chunks = [];
       onLevel?.(0);
 
+      // ⚠️ 一塊都沒收到，而且按住夠久 → 是錄音管線死掉，不是誤觸。
+      // 這兩件事對使用者的意義完全相反：一個要他再按一次，
+      // 另一個要他重新整理。舊版把它們塌成同一句，害人找錯方向。
       const total = captured.reduce((sum, chunk) => sum + chunk.length, 0);
       const seconds = total / rate;
-      // 太短 ＝ 誤觸，安靜地忽略。這是唯一該安靜的情況。
-      if (seconds < MIN_RECORDING_SECONDS) return null;
+      const verdict = classifyRecording({
+        chunkCount: captured.length,
+        heldMs,
+        seconds,
+      });
 
-      return { wav: chunksToWav(captured, rate), peak: capturedPeak, seconds };
+      if (verdict === "no-audio") {
+        console.error(
+          `[recorder] 按住了 ${heldMs}ms 卻一塊音訊都沒收到——` +
+            "AudioContext 或 AudioWorklet 沒在跑（睡眠喚醒／換音訊裝置／被別的分頁佔用）"
+        );
+        return { kind: "no-audio", heldMs };
+      }
+      if (verdict === "too-short") return { kind: "too-short", seconds };
+
+      return { kind: "ok", wav: chunksToWav(captured, rate), peak: capturedPeak, seconds };
     },
 
     async dispose() {
       abortPending = true;
       if (starting) await starting.catch(() => {});
+      // teardown() 已經把 context 關掉了，這裡不用再關一次
       teardown();
       chunks = [];
-      if (context) {
-        await context.close().catch(() => {});
-        context = null;
-      }
     },
   };
 }
