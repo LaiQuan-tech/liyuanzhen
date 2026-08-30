@@ -1,11 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <!--
-    Favicon。跟 Nav 左上角那個標記同一套語言：黃底、墨框、圓角方塊、「李」字。
+    Favicon。跟 Nav 左上角那個標記同一套語言：紫底、墨框、圓角方塊、白色「李」字。
+    ⚠️ 底色跟著 --brand 走（書名毛筆的紫）。改色票時這個檔案不會被 grep 到
+    class 名稱，要靠找 hex——2026-08-30 那次改版就漏了它。
     ⚠️ 刻意不畫她的長相。favicon 只有 16px，任何人像都會糊成一團色塊，
     而且肖像授權是給網站內容用的，不是拿來當品牌識別。
   -->
-  <rect x="2" y="2" width="60" height="60" rx="14" fill="#FFCE00" stroke="#1A1A1A" stroke-width="4"/>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#63518D" stroke="#1A1A1A" stroke-width="4"/>
   <text x="32" y="33" font-family="'Noto Sans TC','PingFang TC','Heiti TC',sans-serif"
-        font-size="38" font-weight="800" fill="#1A1A1A"
+        font-size="38" font-weight="800" fill="#FFFFFF"
         text-anchor="middle" dominant-baseline="central">李</text>
 </svg>

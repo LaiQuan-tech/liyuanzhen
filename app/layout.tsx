@@ -52,7 +52,14 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#FFCE00",
+  /**
+   * Safari（iOS）用這個值染狀態列與瀏覽器介面。
+   *
+   * ⚠️ 它跟色票是分開的兩份，改色時**很容易漏掉**——實機上就是狀態列一條
+   * 亮黃、底下整頁薰衣草，比不套色還突兀。改 --bg 就要一起改這裡。
+   * 值要跟 Nav 看到的底色一致（Nav 是 bg-paper/85 疊在 --bg 上，等於 --bg）。
+   */
+  themeColor: "#DBD3EA",
   width: "device-width",
   initialScale: 1,
 };
