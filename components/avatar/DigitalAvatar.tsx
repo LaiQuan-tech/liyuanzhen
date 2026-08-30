@@ -63,7 +63,7 @@ export default function DigitalAvatar({
           style={{ boxShadow: "4px 5px 0 rgba(26,26,26,.18)" }}
         >
           <span
-            className="font-display font-extrabold leading-none text-ink"
+            className="font-display font-extrabold leading-none text-white"
             style={{ fontSize }}
           >
             李

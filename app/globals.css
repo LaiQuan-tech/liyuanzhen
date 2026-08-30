@@ -8,45 +8,59 @@
  * ⚠️ 色票是**雙軌**的：這裡的 :root 與 tailwind.config.ts 各寫一份，
  * 兩邊的值必須一致。只改一邊等於沒改——這是最容易發生、也最難察覺的錯。
  *
- * ── 五色分區 ────────────────────────────────────────────────
- * 原本只有單一黃色，那是為了「不畫她的臉」而生的極簡設定。
- * 現在主視覺是李元貞老師本人，配色要傳達「有能量、很正義」，
- * 所以改成五色家族，每個首頁區塊輪一個主色：結構一致，只有顏色在跳。
+ * ── 色票來源：《我來了！臺灣婦女改變了》書封 ────────────────
+ * 2026-08-30 改版。前一版是暖色（米黃底 ＋ #FFCE00）＋ 五個飽和色分區，
+ * 那是「不畫她的臉」時期的設定。現在網站與書要並排出現，色系跟著書走。
  *
- * 🔴 每個顏色都**已實測對比度**，而且是在選色階段就算完的，不是事後補救：
+ * 🔴 這些不是挑好看的，是從書封原檔（6142×2480）取樣出來的實際色值：
  *
- *   火橙 #FF6B35  配 ink    6.14:1   Hero
- *   桃紅 #C4126B  配 white  5.76:1   婦運歷程
- *   紫   #5B2D8E  配 white  9.50:1   她說過的話
- *   青綠 #0F7A6B  配 white  5.23:1   她是誰
- *   黃   #FFCE00  配 ink   11.67:1   收尾
+ *   書封背景　#DBD3EA      書名毛筆　#63518D
+ *   中央山體　#5D1D3D      書背深色　#562443      藍紫波紋　#716A90
  *
- * ⚠️ 中間亮度是死區。原本想用的 #E5197F（較亮的桃紅）**黑字 3.96、白字 4.40，
- * 兩邊都不及格**——所以壓深到 #C4126B 才配得了白字。
- * 換色之前先算，不要挑好看的再來救。內文 4.5:1、大字 3:1。
+ * 書封本身是**單一色相的濃淡階梯**，不是多色系。所以分區也改成靠深淺區分，
+ * 不靠色相跳動——五個區塊各取階梯上的一階，這正是書封自己的做法。
+ *
+ * 🔴 每一階都實測過對比度（選色階段就算完，不是事後補救）：
+ *
+ *   酒紅 #5D1D3D  配 white 12.29:1   Hero
+ *   梅紫 #593B56  配 white  9.61:1   婦運歷程（用 wash）
+ *   墨紫 #63518D  配 white  6.79:1   她說過的話　＝ brand（書名色）
+ *   霧藍 #716A90  配 white  5.04:1   她是誰
+ *   淡紫 #B7B7D4  配 ink    8.90:1   收尾
+ *
+ * ⚠️ 中間亮度是死區。書封上的 #988EA2 白字 3.12、墨字 5.57，拿來當區塊底
+ * 兩邊都不夠安全，所以整條階梯刻意跳過它。
+ * ⚠️ brand 從黃（配 ink）變成紫（配 white），**字色要跟著翻**。
+ * 底色一換就要重算，不要挑好看的再來救。內文 4.5:1、大字 3:1。
  */
 :root {
-  --bg: #fffbec;
+  --bg: #dbd3ea; /* 書封背景色，原樣 */
   --bg-alt: #ffffff;
-  --bg-tint: #fff6d6;
+  --bg-tint: #d2cae6;
   --ink: #1a1a1a;
-  --ink-soft: #2e2a1c;
-  --gray: #6b6357;
-  --gray2: #726b5f; /* 舊值 #9c9384 在白底只有 3.03:1，見 tailwind.config.ts 的說明 */
-  --line: rgba(26, 26, 26, 0.11);
-  --yellow: #ffce00;
-  --yellow-soft: #ffe680;
-  --yellow-wash: #fff6d6;
+  --ink-soft: #2c2635; /* 舊值 #2e2a1c 是暖褐黑，在薰衣草底上會發濁 */
+  /* ⚠️ 這兩個在 --bg-tint 上最吃緊，改色時一定要重算：
+     #5c5570 只有 4.14:1、#625b78 只有 3.77:1，都不及格。現在的值最差 5.07 / 4.77。
+     gray2 寫的是 ANSWER_DISCLAIMER——法律上必須存在的字，看不清楚等於沒有。 */
+  --gray: #544d66;
+  --gray2: #585070;
+  --line: rgba(45, 32, 58, 0.14);
+  /* brand ＝ 書名毛筆的紫。⚠️ 它是**深色**，上面的字要用白的（舊版的黃是反過來的）。 */
+  --brand: #63518d;
+  --brand-soft: #c3b7e4; /* 深底上的淺紫。配 ink 底 9.29:1 */
+  --brand-wash: #ede9f6;
 
-  /* 五色分區。註解在檔頭，含對比度。 */
-  --flame: #ff6b35;
-  --flame-wash: #fff0ea;
-  --rose: #c4126b;
-  --rose-wash: #fdeaf3;
-  --violet: #5b2d8e;
-  --violet-wash: #f1ecf8;
-  --teal: #0f7a6b;
-  --teal-wash: #e7f4f1;
+  /* 五色分區＝書封的濃淡階梯。註解在檔頭，含對比度與各自該配的字色。 */
+  --wine: #5d1d3d;
+  --wine-wash: #f1e8ed;
+  --plum: #593b56;
+  --plum-wash: #f0ebef;
+  --violet: #63518d;
+  --violet-wash: #ede9f6;
+  --dusk: #716a90;
+  --dusk-wash: #ebeaf3;
+  --mist: #b7b7d4;
+  --mist-wash: #f0f0f7;
 
   --ok: #15803d;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -65,8 +79,8 @@
     -webkit-font-smoothing: antialiased;
   }
   ::selection {
-    background: var(--yellow);
-    color: var(--ink);
+    background: var(--brand);
+    color: #fff; /* ⚠️ brand 從黃變紫，字色跟著翻，否則選取範圍看不見 */
   }
   /* 鍵盤焦點必須看得見——展場與提案現場都會有人用鍵盤操作 */
   :focus-visible {
@@ -142,7 +156,9 @@
     @apply inline-block;
     font-size: 12.5px;
     font-weight: 700;
-    color: var(--yellow);
+    /* ⚠️ 這是**深底上的字**，不可以用 --brand（紫配黑只有 1.5:1）。
+       --brand-soft 是為了這個位置存在的：配 ink 底 9.29:1。 */
+    color: var(--brand-soft);
     background: var(--ink);
     letter-spacing: 0.02em;
     padding: 6px 15px;
@@ -203,7 +219,7 @@
     box-shadow: 3px 4px 0 rgba(26, 26, 26, 0.1);
   }
   .lz-card-wash {
-    background: var(--yellow-wash);
+    background: var(--brand-wash);
     border: 1.5px solid var(--ink);
     border-radius: 14px;
     box-shadow: 3px 4px 0 rgba(26, 26, 26, 0.1);
@@ -212,7 +228,8 @@
   /* ── 小藥丸標籤 ─────────────────────────── */
   .lz-pill {
     @apply inline-flex items-center;
-    background: var(--yellow);
+    background: var(--brand);
+    color: #fff; /* ⚠️ 底色從黃變紫，繼承來的墨字會看不見 */
     border: 1.5px solid var(--ink);
     border-radius: 999px;
     font-size: 12px;
@@ -239,9 +256,9 @@
     padding: 11px 15px;
   }
   .lz-bubble-her {
-    background: var(--yellow-wash);
+    background: var(--brand-wash);
     color: var(--ink);
-    border: 1px solid #ece0c4;
+    border: 1px solid #ddd4ee;
     border-radius: 13px;
     border-bottom-left-radius: 4px;
     padding: 11px 15px;
@@ -261,7 +278,7 @@
   }
   .lz-chip:hover {
     transform: translate(-1px, -1px);
-    background: var(--yellow-wash);
+    background: var(--brand-wash);
     box-shadow: 3px 4px 0 rgba(26, 26, 26, 0.18);
   }
 
@@ -292,7 +309,7 @@
     height: 13px;
     border: 2px solid var(--ink);
     border-radius: 999px;
-    background: var(--yellow);
+    background: var(--brand);
   }
   .lz-timeline > li:last-child {
     border-left-color: transparent;

@@ -55,7 +55,7 @@ export default function HomePage() {
         {/* ── 1. Hero ─────────────────────────────────────────── */}
         {/* 主標是她自己的話：《眾女成城》上冊題「父權牆上打小洞」，
             下冊回應「釘子要釘穿」。不是我們編的標語。 */}
-        <section className="lz-section border-b-2 border-ink bg-flame">
+        <section className="lz-section border-b-2 border-ink bg-mist">
           <div className="lz-wrap-wide grid items-center gap-10 md:grid-cols-[1fr_minmax(0,340px)]">
             <Reveal>
               <span className="lz-eyebrow">{AVATAR_NAME}</span>
@@ -68,7 +68,7 @@ export default function HomePage() {
                 <br />
                 如果戰鬥，擁抱理想，黑夜即成愛人
               </h1>
-              <p className="mt-4 text-[13px] text-ink-soft/70">
+              <p className="mt-4 text-[13px] text-ink-soft/90">
                 —— 李元貞〈兩女人散步——給芳枝〉，《我來了！臺灣婦女改變了》
               </p>
               <p className="lz-lead mt-5 !text-ink-soft">
@@ -83,7 +83,7 @@ export default function HomePage() {
                   改用文字對話
                 </Link>
               </div>
-              <p className="mt-4 text-[13px] text-ink-soft/70">
+              <p className="mt-4 text-[13px] text-ink-soft/90">
                 需要麥克風。不方便出聲，用文字版一樣問。
               </p>
             </Reveal>
@@ -104,13 +104,13 @@ export default function HomePage() {
                   />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center bg-brand">
-                    <span className="font-display text-[120px] font-extrabold leading-none">
+                    <span className="font-display text-[120px] font-extrabold leading-none text-white">
                       李
                     </span>
                   </div>
                 )}
               </div>
-              <p className="mt-3 text-[12.5px] text-ink-soft/70">
+              <p className="mt-3 text-[12.5px] text-ink-soft/90">
                 李元貞，1946 年生。台大中文系碩士，淡江大學中文系榮譽教授。
               </p>
             </Reveal>
@@ -172,7 +172,7 @@ export default function HomePage() {
         </section>
 
         {/* ── 3. 她是誰 ────────────────────────────────────────── */}
-        <section className="lz-section border-y-2 border-ink bg-teal-wash">
+        <section className="lz-section border-y-2 border-ink bg-dusk-wash">
           <div className="lz-wrap">
             <SectionHead
               eyebrow="她是誰"
@@ -214,7 +214,7 @@ export default function HomePage() {
                     <p className="mt-3 flex-1 text-[14px] leading-relaxed text-ink-soft">
                       {w.body}
                     </p>
-                    <span className="mt-4 text-[13px] font-bold text-teal underline underline-offset-2">
+                    <span className="mt-4 text-[13px] font-bold text-violet underline underline-offset-2">
                       問她這本 →
                     </span>
                   </Link>
@@ -233,7 +233,7 @@ export default function HomePage() {
         </section>
 
         {/* ── 4. 婦運歷程 ──────────────────────────────────────── */}
-        <section className="lz-section bg-rose-wash">
+        <section className="lz-section bg-plum-wash">
           <div className="lz-wrap">
             <SectionHead
               eyebrow="婦運歷程"
@@ -267,7 +267,7 @@ export default function HomePage() {
                           {item.note}
                         </p>
                       )}
-                      <span className="mt-3 inline-block text-[13px] font-bold text-rose underline underline-offset-2">
+                      <span className="mt-3 inline-block text-[13px] font-bold text-plum underline underline-offset-2">
                         問她這件事 →
                       </span>
                     </Link>
@@ -397,7 +397,7 @@ export default function HomePage() {
         </section>
 
         {/* ── 7. 現在換你問 ────────────────────────────────────── */}
-        <section className="lz-section border-t-2 border-ink bg-brand">
+        <section className="lz-section border-t-2 border-ink bg-mist">
           <div className="lz-wrap text-center">
             <Reveal>
               <h2 className="lz-h2">現在，換你問。</h2>

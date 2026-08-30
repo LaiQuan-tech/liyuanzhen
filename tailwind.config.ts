@@ -4,8 +4,9 @@ import type { Config } from "tailwindcss";
  * ⚠️ 色票是**雙軌**的：這裡與 app/globals.css 的 :root 各寫一份，
  * 兩邊的值必須一致。只改一邊等於沒改。
  *
- * 每個顏色的對比度與用途說明寫在 globals.css 的檔頭（那份是主要文件）。
- * 簡述：五色分區，每個首頁區塊輪一個主色，全部實測過 ≥ 4.5:1。
+ * 色值取樣自《我來了！臺灣婦女改變了》書封原檔。完整說明與對比度實測
+ * 寫在 globals.css 的檔頭（那份是主要文件）。
+ * 簡述：書封是單一色相的濃淡階梯，所以分區靠深淺不靠色相，全部實測 ≥ 4.5:1。
  */
 const config: Config = {
   content: [
@@ -16,25 +17,29 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        paper: { DEFAULT: "#FFFBEC", alt: "#FFFFFF", tint: "#FFF6D6" },
-        ink: { DEFAULT: "#1A1A1A", pure: "#000000", soft: "#2E2A1C" },
-        // ⚠️ light 從 #9C9384 改成 #726B5F。舊值在白底上只有 3.03:1，
-        // 而它被拿來寫 ANSWER_DISCLAIMER（法律／倫理上必須存在的免責句）
-        // 與時間軸的補充說明——**必須存在的字看不清楚，等於沒有**。
-        // 新值在白、紙、以及五個 wash 底色上最差 4.54:1，全部通過。
-        // 這是實測抓到的，不是看出來的：光看設計稿不會發現。
-        muted: { DEFAULT: "#6B6357", light: "#726B5F" },
-        brand: { DEFAULT: "#FFCE00", soft: "#FFE680", wash: "#FFF6D6" },
+        // 書封背景色，原樣。ink 在它上面 12.03:1
+        paper: { DEFAULT: "#DBD3EA", alt: "#FFFFFF", tint: "#D2CAE6" },
+        // ⚠️ soft 從 #2E2A1C（暖褐黑）改成冷調——暖黑在薰衣草底上會發濁
+        ink: { DEFAULT: "#1A1A1A", pure: "#000000", soft: "#2C2635" },
+        // ⚠️ 這兩個在 paper-tint 上最吃緊。#5C5570 只有 4.14:1、#625B78 只有 3.77:1，
+        // 都不及格；現在的值最差 5.07 / 4.77。light 寫的是 ANSWER_DISCLAIMER，
+        // 那是法律上必須存在的字——看不清楚等於沒有。改色一定要重算。
+        muted: { DEFAULT: "#544D66", light: "#585070" },
+        // 🔴 brand ＝ 書名毛筆的紫，是**深色**。舊版的黃是淺色配 ink，
+        // 換過來之後 bg-brand 上的字一律要 text-white，不要沿用 text-ink。
+        // soft 是給「深底上的淺字」用的（配 ink 底 9.29:1），不要拿它當背景。
+        brand: { DEFAULT: "#63518D", soft: "#C3B7E4", wash: "#EDE9F6" },
 
-        // 五色分區。每組的 wash 是同色系的極淺底，給卡片與次要區塊用。
+        // 五色分區＝書封的濃淡階梯，不是五個色相。
         // 註記的是「這個色當背景時，其上的文字該用什麼顏色」——不要用反。
-        flame: { DEFAULT: "#FF6B35", wash: "#FFF0EA" }, // 配 ink   6.14:1
-        rose: { DEFAULT: "#C4126B", wash: "#FDEAF3" }, //  配 white 5.76:1
-        violet: { DEFAULT: "#5B2D8E", wash: "#F1ECF8" }, // 配 white 9.50:1
-        teal: { DEFAULT: "#0F7A6B", wash: "#E7F4F1" }, //  配 white 5.23:1
+        wine: { DEFAULT: "#5D1D3D", wash: "#F1E8ED" }, //  配 white 12.29:1  Hero
+        plum: { DEFAULT: "#593B56", wash: "#F0EBEF" }, //  配 white  9.61:1
+        violet: { DEFAULT: "#63518D", wash: "#EDE9F6" }, // 配 white  6.79:1
+        dusk: { DEFAULT: "#716A90", wash: "#EBEAF3" }, //  配 white  5.04:1
+        mist: { DEFAULT: "#B7B7D4", wash: "#F0F0F7" }, //  配 ink    8.90:1
 
         ok: "#15803D",
-        hairline: "rgba(26,26,26,.11)",
+        hairline: "rgba(45,32,58,.14)",
       },
       fontFamily: {
         display: ["var(--font-baloo)", "var(--font-noto)", "sans-serif"],

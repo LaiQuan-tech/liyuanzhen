@@ -524,7 +524,7 @@ async function microphonePending(): Promise<boolean> {
               "transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45",
               recording
                 ? "scale-105 bg-white text-ink"
-                : "bg-brand text-ink hover:brightness-105 active:scale-95",
+                : "bg-brand text-white hover:brightness-110 active:scale-95",
             ].join(" ")}
             // ⚠️ 這裡原本有一圈跟著音量脹縮的 boxShadow。音量計做出來之後把它拿掉了：
             // 它會擴散 44px，剛好把下面那排柱子糊在自己的灰影裡（實測截圖確認），

@@ -36,7 +36,7 @@ export default function Nav() {
     <header className="sticky top-0 z-50 border-b-[1.5px] border-ink/15 bg-paper/85 backdrop-blur-xl">
       <div className="lz-wrap-wide flex items-center justify-between gap-3 py-3">
         <Link href="/" className="flex shrink-0 items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg border-[1.5px] border-ink bg-brand font-display text-[15px] font-extrabold">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg border-[1.5px] border-ink bg-brand font-display text-[15px] font-extrabold text-white">
             李
           </span>
           <span className="font-display text-[15px] font-extrabold">李元貞 × AI 數位人</span>
@@ -47,7 +47,7 @@ export default function Nav() {
             <Link
               key={item.href}
               href={item.href}
-              className="rounded-full px-3 py-1.5 text-[13.5px] font-medium text-muted transition hover:bg-flame-wash hover:text-ink"
+              className="rounded-full px-3 py-1.5 text-[13.5px] font-medium text-muted transition hover:bg-wine-wash hover:text-ink"
             >
               {item.label}
             </Link>
