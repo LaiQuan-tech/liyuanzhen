@@ -25,6 +25,7 @@ const TOKEN_ENDPOINT = "/api/avatar-token";
 interface TokenResponse {
   sessionToken?: string;
   maxSessionSeconds?: number;
+  sessionId?: string;
   reason?: string;
 }
 
@@ -284,6 +285,8 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
     if (typeof body.maxSessionSeconds === "number" && body.maxSessionSeconds > 0) {
       hooks.onSessionLimit?.(body.maxSessionSeconds);
     }
+    // 收線時要回報這個 id，帳本才記得到真實時長
+    if (body.sessionId) hooks.onSessionOpened?.(body.sessionId);
     return body.sessionToken;
   }
 

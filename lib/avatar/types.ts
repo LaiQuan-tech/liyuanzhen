@@ -50,6 +50,14 @@ export interface AvatarDriverHooks {
    */
   onSessionLimit?(seconds: number): void;
   /**
+   * 計費 session 開好了，這是它的 id。
+   *
+   * ⚠️ 呼叫端要留著它，收線時回報給 /api/avatar-session/close——
+   * 那是帳本拿到**真實時長**的唯一路徑。沒有它，每一筆都只能以單次上限估算，
+   * 而上限是 3 分鐘，實際多半遠低於此，帳會嚴重高估。
+   */
+  onSessionOpened?(sessionId: string): void;
+  /**
    * 影像還活著、但這一段話發不出聲音。
    *
    * ⚠️ 跟 `onFatal` 要分開：onFatal 會整個降級回 monogram，

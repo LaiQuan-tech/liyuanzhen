@@ -144,6 +144,46 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
   const sessionLimitRef = useRef<number | null>(null);
 
   /**
+   * 目前這個計費 session 的 id。收線時要回報給伺服器。
+   *
+   * 🔴 沒有這一段的那段期間，帳本記得到「開了幾個 session」，記不到「用了幾分鐘」。
+   * 實測正式站 88 筆裡 billed_minutes 有值的是 0 筆，而未結算的列在預算計算裡
+   * 一律以單次上限（3 分鐘）估算——實際多半遠低於此，帳因此嚴重高估。
+   */
+  const sessionIdRef = useRef<string | null>(null);
+
+  /**
+   * 通知伺服器「這個 session 結束了」。
+   *
+   * ⚠️ 一定要用 `sendBeacon`。收線最常見的觸發點是 `pagehide`（關分頁、切走），
+   * 那個時候一般的 fetch 會跟著分頁一起被殺掉——而那正是我們最需要這個訊號的時刻。
+   * sendBeacon 就是為了這個情境存在的：交給瀏覽器背景送，不受分頁生命週期影響。
+   *
+   * ⚠️ 只送 id，不送時長。時長由伺服器用 started_at 算——
+   * 這一支端點沒有身分驗證，收下客戶端自報的秒數等於讓對方決定我們的帳。
+   */
+  const reportSessionClosed = useCallback((sessionId: string) => {
+    const body = JSON.stringify({ sessionId });
+    try {
+      if (navigator.sendBeacon?.(
+        "/api/avatar-session/close",
+        new Blob([body], { type: "application/json" })
+      )) {
+        return;
+      }
+    } catch {
+      // 落到下面的 fetch
+    }
+    // 退路。keepalive 讓它在分頁關閉之後仍有機會送出，但不如 sendBeacon 可靠。
+    void fetch("/api/avatar-session/close", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      keepalive: true,
+    }).catch(() => {});
+  }, []);
+
+  /**
    * 使用者用手勢解除過靜音了嗎。
    *
    * 🔴 這個 ref 存在的理由是 SDK 會在我們背後改 `<video>.muted`。
@@ -184,12 +224,20 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     }
     driverRef.current = null;
     sessionLimitRef.current = null;
+
+    // 🔴 回報要在 await 之前、而且是同步的。
+    // pagehide 觸發時分頁隨時會被殺掉，await 之後的程式碼不保證跑得到——
+    // 那正是最需要這個訊號的時刻（訪客直接關分頁）。
+    const closedId = sessionIdRef.current;
+    sessionIdRef.current = null;
+    if (closedId) reportSessionClosed(closedId);
+
     await driver.destroy();
     trace("串流被收掉", why, "warn");
     speakingCb.current(false);
     // 串流沒了還留著上一輪的字幕，畫面會停在訪客無法理解的中間態
     teardownCb.current?.();
-  }, []);
+  }, [reportSessionClosed]);
 
   /**
    * 元件已經卸載。⚠️ 用 ref 不用區域變數——`ensureDriver()` 會在 effect 之外
@@ -227,6 +275,9 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
           },
           onSpeechFailed: () => {
             if (!unmountedRef.current) speechFailedCb.current?.();
+          },
+          onSessionOpened: (sessionId) => {
+            sessionIdRef.current = sessionId;
           },
           onSessionLimit: (seconds) => {
             // 只記下來，武裝硬上限是 prepare() 的事——這個回呼會在

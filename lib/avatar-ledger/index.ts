@@ -117,9 +117,58 @@ export async function openSession(
   if (error) throw error;
 }
 
+/** 一次最多結算幾筆。避免一個請求被一大批殭屍拖慢。 */
+const SETTLE_BATCH = 50;
+
 /**
- * 收到關閉訊號時結算。收不到也沒關係——`isStale` 會用時間判定，
- * 而未結算的列在預算計算裡是以單次上限估算的，不會低估。
+ * 把已經逾時、卻還沒結算的 session 補上帳。
+ *
+ * 🔴 這支存在的理由：`closeSession()` 從一開始就寫好了，但**沒有任何地方呼叫它**——
+ * 沒有 API 端點，瀏覽器也不會通知。實測正式站 88 個 session 裡
+ * `billed_minutes` 有值的是 0 個。結果是帳本記得到「開了幾個」，
+ * 記不到「用了幾分鐘」，而後者才是帳單上的數字。
+ *
+ * ⚠️ 殭屍的真實時長是**不知道**的，不是零。訪客關掉分頁之後 WebRTC 幾秒內就斷，
+ * 但我們觀察不到那一刻。所以這裡一律以單次上限結算——那是上限不是實測值。
+ * 想要真實數字，靠的是 closeSession 收得到訊號（見 /api/avatar-session/close），
+ * 不是靠這裡估得更準。報表要把兩者分開呈現，不要混成一個數字。
+ */
+export async function settleStaleSessions(now = Date.now()): Promise<number> {
+  const limits = readLimits();
+  const db = createAdminSupabase();
+  // 跟 isStale 用同一組判準（單次上限 + 30 秒緩衝），不要各自寫一套
+  const cutoff = new Date(now - (limits.maxSessionSeconds + 30) * 1000).toISOString();
+
+  const { data, error } = await db
+    .from("avatar_sessions")
+    .select("id, started_at, max_seconds")
+    .is("ended_at", null)
+    .lt("started_at", cutoff)
+    .limit(SETTLE_BATCH);
+  if (error) throw error;
+
+  const rows = data ?? [];
+  for (const row of rows) {
+    const startedAt = Date.parse(row.started_at);
+    const maxSeconds = row.max_seconds ?? limits.maxSessionSeconds;
+    // 以「開始 + 單次上限」當結束時間。⚠️ 不要用 now——掃描跑得越晚算得越久，
+    // 同一筆資料會因為什麼時候被掃到而算出不同的錢。
+    const endedAt = startedAt + maxSeconds * 1000;
+    await db
+      .from("avatar_sessions")
+      .update({
+        ended_at: new Date(endedAt).toISOString(),
+        billed_minutes: billableMinutes(startedAt, endedAt, maxSeconds),
+      })
+      .eq("id", row.id)
+      .is("ended_at", null); // 併發保護：期間剛好收到真實訊號就讓那一筆贏
+  }
+  return rows.length;
+}
+
+/**
+ * 收到關閉訊號時結算。這是**唯一**能拿到真實時長的路徑，
+ * 收不到就只能由 settleStaleSessions 以上限估算。
  */
 export async function closeSession(sessionId: string): Promise<void> {
   const db = createAdminSupabase();

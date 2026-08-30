@@ -146,7 +146,9 @@ export async function POST(request: NextRequest) {
     // 就會有一個在計費卻不在帳本裡的 session，並發水位從此永久低估。
     await openSession(sessionId, hashClient(ip), maxSessionSeconds);
 
-    return json({ sessionToken, maxSessionSeconds });
+    // ⚠️ sessionId 要回給瀏覽器，否則它關閉時沒有東西可以回報，
+    // 帳本就永遠只記得到「開了幾個」、記不到「用了幾分鐘」。
+    return json({ sessionToken, maxSessionSeconds, sessionId });
   } catch (error) {
     console.error("[avatar-token] 例外：", error);
     return json({ error: "語音功能暫時無法使用。" }, 502);

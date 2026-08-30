@@ -13,7 +13,8 @@
     "smoke:chat": "tsx --env-file=.env.local scripts/smoke-chat.ts",
     "ingest:supabase": "tsx --env-file=.env.local scripts/ingest-supabase.ts",
     "verify:liveavatar": "tsx --env-file=.env.local scripts/verify-liveavatar.ts",
-    "verify:stt": "tsx --env-file=.env.local scripts/verify-stt.ts"
+    "verify:stt": "tsx --env-file=.env.local scripts/verify-stt.ts",
+    "avatar:usage": "tsx --env-file=.env.local scripts/avatar-usage.ts"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",
