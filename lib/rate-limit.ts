@@ -94,6 +94,16 @@ export interface RateLimiterOptions {
   name: string;
   perMinute?: number;
   perDay?: number;
+  /**
+   * 這支端點的請求要不要算進全站每日總量。
+   *
+   * 🔴 預設 true，但**不花錢的端點要設 false**。
+   * LIMIT_GLOBAL_PER_DAY 是拿來擋 AI 費用的天花板（見它的註解），
+   * 讓一支不呼叫任何付費 API 的端點去消耗它，等於開了一個很便宜的攻擊面：
+   * 灌 4000 次活動報名，就能讓整站的語音與問答停擺一天。
+   * 那不是省錢，是把成本上限變成阻斷服務的按鈕。
+   */
+  countsTowardGlobal?: boolean;
 }
 
 /**
@@ -106,6 +116,7 @@ export function createRateLimiter({
   name,
   perMinute = LIMIT_PER_MINUTE,
   perDay = LIMIT_PER_DAY,
+  countsTowardGlobal = true,
 }: RateLimiterOptions): RateLimiter {
   const minuteStore = new Map<string, Bucket>();
   const dayStore = new Map<string, Bucket>();
@@ -117,7 +128,8 @@ export function createRateLimiter({
     if (now >= globalDay.resetAt) {
       globalDay = { count: 0, resetAt: now + DAY };
     }
-    if (globalDay.count >= LIMIT_GLOBAL_PER_DAY) {
+    // 不計入全站總量的端點，也不受它限制——見 countsTowardGlobal 的說明
+    if (countsTowardGlobal && globalDay.count >= LIMIT_GLOBAL_PER_DAY) {
       return {
         ok: false,
         reason: "global",
@@ -131,7 +143,7 @@ export function createRateLimiter({
     const day = hit(dayStore, key, perDay, DAY, now);
     if (!day.ok) return { ok: false, reason: "per-day", retryAfter: day.retryAfter };
 
-    globalDay.count++;
+    if (countsTowardGlobal) globalDay.count++;
     return { ok: true, retryAfter: 0 };
   }) as RateLimiter;
 
@@ -168,6 +180,20 @@ export const avatarTokenRateLimit: RateLimiter = createRateLimiter({
   name: "avatar-token",
   perMinute: 12,
   perDay: 100,
+});
+
+/**
+ * 活動報名。
+ *
+ * ⚠️ `countsTowardGlobal: false`——報名不呼叫任何付費 API，不該消耗 AI 的預算。
+ * 額度訂得比其他端點緊：同一個 IP 一分鐘報六次已經不是正常使用了，
+ * 而報名本來就是一場活動填一次。
+ */
+export const signupRateLimit: RateLimiter = createRateLimiter({
+  name: "signup",
+  perMinute: 6,
+  perDay: 40,
+  countsTowardGlobal: false,
 });
 
 /** 測試用：清掉所有 limiter 的桶子與全站總量 */

@@ -136,3 +136,41 @@ describe("createRateLimiter 的隔離性", () => {
     expect(b("1.1.1.1", now).ok).toBe(false);
   });
 });
+
+/**
+ * 🔴 不花錢的端點不可以消耗全站的 AI 預算。
+ *
+ * LIMIT_GLOBAL_PER_DAY 是拿來擋 Gemini／ElevenLabs 費用的天花板。
+ * 活動報名一支付費 API 都沒呼叫，如果它也計入那個總量，
+ * 灌滿報名就能讓整站的語音與問答停擺一天——把成本上限變成阻斷服務的按鈕。
+ */
+describe("countsTowardGlobal", () => {
+  it("不計入的端點，用光了也不會擋到會計入的端點", () => {
+    __resetRateLimit();
+    const free = createRateLimiter({
+      name: "test-free",
+      perMinute: 10_000,
+      perDay: 10_000,
+      countsTowardGlobal: false,
+    });
+    const paid = createRateLimiter({ name: "test-paid" });
+
+    const now = Date.now();
+    for (let i = 0; i < LIMIT_GLOBAL_PER_DAY + 50; i++) {
+      // 每次換 key，才不會先撞到自己的每 IP 額度
+      expect(free(`ip-${i}`, now).ok).toBe(true);
+    }
+    // 全站總量完全沒有被動到，付費端點照樣進得來
+    expect(paid("someone", now).ok).toBe(true);
+  });
+
+  it("預設仍然計入——不要因為多了一個選項就把原本的保護關掉", () => {
+    __resetRateLimit();
+    const paid = createRateLimiter({ name: "test-default", perMinute: 10_000, perDay: 10_000 });
+    const now = Date.now();
+    for (let i = 0; i < LIMIT_GLOBAL_PER_DAY; i++) paid(`ip-${i}`, now);
+    const verdict = paid("next-one", now);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toBe("global");
+  });
+});
