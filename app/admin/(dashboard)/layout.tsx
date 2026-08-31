@@ -1,6 +1,6 @@
-import Link from "next/link";
 import { currentUser, isAdmin } from "@/lib/admin-auth";
 import { hasAuthCredentials } from "@/lib/supabase-auth";
+import AdminSidebar from "@/components/admin/AdminSidebar";
 import { signOutAction } from "../auth-actions";
 
 /**
@@ -14,15 +14,14 @@ import { signOutAction } from "../auth-actions";
  * server action 開頭的 `requireAdmin()`。頁面層的檢查只保護「看得到什麼」，
  * 保護不了「做得到什麼」——那兩件事在 App Router 裡是分開的。
  *
+ * 🔴 **這個檔案必須留在 server component。** 底下兩個 `await` 就是那第二道檢查；
+ * 為了做側邊欄的 active 高亮或手機收合而在這裡加 "use client"，會讓它們整個失效。
+ * 那些需要 client 的部分關在 `components/admin/AdminSidebar.tsx` 那一片葉子裡。
+ *
  * 樣式刻意不套 .lz-cta / sticker 陰影那一套。那是對外頁面的語言，
  * 後台要的是掃得快、資訊密度高。
  */
 export const dynamic = "force-dynamic";
-
-const NAV = [
-  { href: "/admin", label: "場次" },
-  { href: "/events", label: "看公開頁", external: true },
-] as const;
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   // 還沒設定就講清楚是哪一步沒做。⚠️ 這一段要放在權限檢查之前——
@@ -67,32 +66,16 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   }
 
   return (
-    <div className="min-h-screen bg-paper-alt text-ink">
-      <header className="sticky top-0 z-40 border-b-[1.5px] border-ink/15 bg-paper-alt/95 backdrop-blur">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-5 gap-y-2 px-5 py-3">
-          <span className="font-display text-[15px] font-extrabold">活動後台</span>
-          <nav className="flex items-center gap-4 text-[14px]">
-            {NAV.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="text-muted underline-offset-4 hover:text-ink hover:underline"
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-          <div className="ml-auto flex items-center gap-3 text-[12.5px] text-muted">
-            <span className="hidden sm:inline">{user?.email}</span>
-            <form action={signOutAction}>
-              <button type="submit" className="underline underline-offset-4 hover:text-ink">
-                登出
-              </button>
-            </form>
-          </div>
-        </div>
-      </header>
-      <main className="mx-auto max-w-5xl px-5 py-8">{children}</main>
+    <div className="min-h-screen bg-paper-alt text-ink lg:flex">
+      <AdminSidebar email={user?.email} />
+      {/*
+        ⚠️ `min-w-0` 不能拿掉。flex 子項的預設 min-width 是 auto，
+        報名名單與問答紀錄的表格都有 min-w-[…px]，沒有這一行的話
+        表格會把整個版面撐開，橫向捲軸跑到 <body> 上而不是表格自己身上。
+      */}
+      <main className="min-w-0 flex-1 px-5 py-8 lg:px-8">
+        <div className="mx-auto max-w-5xl">{children}</div>
+      </main>
     </div>
   );
 }

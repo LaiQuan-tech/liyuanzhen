@@ -61,7 +61,14 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId: sessionIdRef.current, messages: history }),
+          // channel 只給後台的問答紀錄用，讓「打字問的」跟「講話問的」分得開。
+          // 到了 /api/chat 這一層，語音提問已經被 /api/stt 轉成純文字了，
+          // 不明講的話兩者一模一樣。
+          body: JSON.stringify({
+            sessionId: sessionIdRef.current,
+            messages: history,
+            channel: "chat",
+          }),
         });
 
         if (!response.ok || !response.body) {

@@ -224,7 +224,13 @@ export default function LiveStage() {
         fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId: sessionIdRef.current, messages: history }),
+          // 這裡送進去的 transcript 已經是 /api/stt 轉好的純文字，
+          // 跟打字提問無從分辨。channel 是後台唯一能認出「這是語音問的」的依據。
+          body: JSON.stringify({
+            sessionId: sessionIdRef.current,
+            messages: history,
+            channel: "live",
+          }),
         }),
         CHAT_TIMEOUT_MS
       );

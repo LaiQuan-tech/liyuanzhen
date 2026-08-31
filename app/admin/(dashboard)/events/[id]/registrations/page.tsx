@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getEvent, listRegistrations, formatEventDate } from "@/lib/events";
-import CsvButton from "./CsvButton";
+import CsvButton from "@/components/admin/CsvButton";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "報名名單｜活動後台" };

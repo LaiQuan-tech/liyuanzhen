@@ -4,6 +4,7 @@ import { streamChatResponse } from "@/lib/gemini-chat";
 import { createGuardedWriter } from "@/lib/answer-guard";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { logInteraction } from "@/lib/interaction-log";
+import type { InteractionChannel } from "@/lib/interaction-log";
 import { OUT_OF_SCOPE_REPLY, GUARDED_REPLY } from "@/content/site";
 import type { HistoryTurn } from "@/lib/query-expansion";
 
@@ -84,14 +85,21 @@ export async function POST(request: NextRequest) {
     return textResponse("請求格式錯誤。", 400);
   }
 
-  const { sessionId, messages } = (body ?? {}) as {
+  const { sessionId, messages, channel: rawChannel } = (body ?? {}) as {
     sessionId?: unknown;
     messages?: unknown;
+    channel?: unknown;
   };
 
   if (typeof sessionId !== "string" || !Array.isArray(messages) || messages.length === 0) {
     return textResponse("請求格式錯誤。", 400);
   }
+
+  // 打字來的還是講話來的。⚠️ 不認得的值一律當 null，不要原封不動存進資料庫——
+  // 這個欄位有 check constraint，塞別的字串會讓整筆記錄寫入失敗，
+  // 而寫入失敗是被 try/catch 吞掉的，訪客沒事、資料默默不見。
+  const channel: InteractionChannel | null =
+    rawChannel === "chat" || rawChannel === "live" ? rawChannel : null;
 
   const turns: HistoryTurn[] = messages
     .slice(-MAX_MESSAGES)
@@ -111,11 +119,16 @@ export async function POST(request: NextRequest) {
   const history = turns.slice(0, -1);
 
   // 檢索失敗要軟性降級，不能讓整個對話掛掉
+  //
+  // ⚠️ 但降級的結果跟「訪客真的問了不相干的事」長得一模一樣（都是 inScope: false）。
+  // 後台要分得出來，否則系統故障會被當成正常的離題婉拒而沒有人去看。
   let result;
+  let retrievalFailed = false;
   try {
     result = await retrieve(question, history);
   } catch (err) {
     console.error("[chat] 檢索失敗：", err);
+    retrievalFailed = true;
     result = {
       chunks: [],
       topSimilarity: 0,
@@ -140,6 +153,8 @@ export async function POST(request: NextRequest) {
             topSimilarity: result.topSimilarity,
             inScope: false,
             blocked: false,
+            failed: retrievalFailed,
+            channel,
           });
         } catch (err) {
           console.error("[chat] 記錄失敗：", err);
@@ -159,6 +174,7 @@ export async function POST(request: NextRequest) {
     async start(controller) {
       let answer = "";
       let blocked = false;
+      let failed = false;
 
       const writer = createGuardedWriter(
         (text) => controller.enqueue(encoder.encode(text)),
@@ -186,6 +202,9 @@ export async function POST(request: NextRequest) {
         console.error("[chat] 生成失敗：", err);
         controller.enqueue(encoder.encode(FALLBACK_REPLY));
         answer = FALLBACK_REPLY;
+        // 🔴 一定要標。不標的話這一筆在資料庫裡跟一個成功的回答完全一樣，
+        // 後台會把「API 掛了」讀成「語料答得不好」。
+        failed = true;
       }
 
       // ⚠️ 一定要先 await 記錄再 close。
@@ -198,6 +217,8 @@ export async function POST(request: NextRequest) {
           topSimilarity: result.topSimilarity,
           inScope: true,
           blocked,
+          failed,
+          channel,
         });
       } catch (err) {
         console.error("[chat] 記錄失敗：", err);
