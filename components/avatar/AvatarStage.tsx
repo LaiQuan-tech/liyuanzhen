@@ -14,6 +14,12 @@ import { createAvatarDriver, resolveProvider } from "@/lib/avatar";
 import type { AvatarDriver, AvatarProvider, AvatarState } from "@/lib/avatar";
 import { createIdleTimer } from "@/lib/idle-timer";
 import { trace } from "@/lib/trace";
+import {
+  FullBodyStage,
+  FULL_BODY_SRC,
+  HEAD_BOX,
+  HEAD_MASK,
+} from "./full-body-stage";
 
 /**
  * VideoAvatar 只在瀏覽器端載入。Phase 2 之後這條路會把 livekit / webrtc-adapter
@@ -103,6 +109,19 @@ interface Props {
    * 同樣的判準寫在 content/homepage.ts 的 PORTRAIT 註解裡。
    */
   poster?: string;
+  /**
+   * 全身合成模式（只有 size="full" 用得到）。
+   *
+   * 開著的話畫面不再是滿版的一張臉，而是一張她站著的全身底圖 ＋ 疊在頭部
+   * 位置的即時串流。做這件事的理由、代價與對位方法全部寫在
+   * ./full-body-stage.tsx 的檔頭，改動前先讀那份。
+   *
+   * ⚠️ 這個模式**要求 poster 是臉部置中的那一版**
+   * （/avatar-poster-centered.jpg），因為 poster 與影片會疊在同一個位置上。
+   * 傳原本的 /avatar-poster.jpg 進來，串流接上的瞬間臉會往下跳一截——
+   * 那張的臉在畫面 32% 處，不是 50%。
+   */
+  fullBody?: boolean;
 }
 
 const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
@@ -116,6 +135,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     onSpeechFailed,
     autoStart = false,
     poster,
+    fullBody = false,
   },
   ref
 ) {
@@ -514,8 +534,36 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
   if (size === "full") {
     // 滿版舞台。同樣是兩層交叉淡入，但底層是置中的「李」字標記而不是同尺寸的圖，
     // 因為一張 128px 的圖放大到整個螢幕只會糊掉。
+
+    /**
+     * 全身合成要成立，兩個條件缺一不可。
+     *
+     * 🔴 `needsVideo` 這半不能省。降級成 monogram 時（額度用完／關閉／載入失敗）
+     * 臉是**不會動**的，這時候鋪一張她的全身照上去，等於用一張靜態照片
+     * 假裝數位人還在——比單純顯示「李」字標記更會誤導人。
+     */
+    const composited = fullBody && needsVideo;
+
     return (
       <div className="absolute inset-0 overflow-hidden bg-ink">
+        {/*
+          全身底圖。刻意鋪在交叉淡入的兩層**之下**，而且整頁只有這一份。
+
+          ⚠️ 不要為了寫起來順手而把它塞進下面任何一層：放進去的話身體會跟著
+          臉一起淡入淡出，而且兩層同時半透明的那一瞬間，整個人會暗一下
+          （0.5 疊 0.5 不等於 1）。身體是靜態的，本來就不該參與交叉淡入。
+        */}
+        {composited && (
+          <FullBodyStage>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={FULL_BODY_SRC}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          </FullBodyStage>
+        )}
+
         <div
           className="absolute inset-0 transition-opacity duration-700"
           style={{ opacity: videoReady ? 0 : 1 }}
@@ -530,14 +578,39 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
           */}
           {poster && needsVideo ? (
             <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={poster} alt="" className="h-full w-full object-cover" />
+              {composited ? (
+                /*
+                  合成模式：poster 只佔頭部那一格，位置與遮罩必須跟 VideoAvatar
+                  裡的影片**完全一致**，否則串流接上的瞬間臉會位移或閃一下邊。
+                  兩邊共用 HEAD_BOX / HEAD_MASK 就是為了不讓這兩份數字各自漂移。
+                */
+                <FullBodyStage>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={poster}
+                    alt=""
+                    className="absolute object-cover"
+                    style={{
+                      ...HEAD_BOX,
+                      maskImage: HEAD_MASK,
+                      WebkitMaskImage: HEAD_MASK,
+                    }}
+                  />
+                </FullBodyStage>
+              ) : (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img src={poster} alt="" className="h-full w-full object-cover" />
+              )}
               {/*
                 🔴 poster 階段也要有浮水印。
                 這張本身是真實照片（不是 AI 生成的一格），照理不需要標記——
                 首頁那張就沒有。但 /live 整頁就是數位人的舞台，一張佔滿螢幕的臉
                 被錄下來轉傳時，看的人不會去分辨那一格是照片還是算圖。
                 揭露這件事寧可從嚴：少標一次的代價，比多標一次大得多。
+
+                🔴 合成模式下這條**更**不能拿掉：底下那張全身圖的胸部以下是
+                AI 生成的，不是她本人的照片。整個畫面裡真正屬於真實攝影的
+                只有頭部那一小塊。
 
                 ⚠️ 樣式與 top-16 要跟 VideoAvatar 那份一致，否則兩層交叉淡入時
                 浮水印會在畫面上跳一下。改一邊記得改另一邊。
@@ -555,7 +628,13 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
 
         {needsVideo && (
           // videoRef 是一般 prop，不是 ref——理由寫在 VideoAvatar 的 props 註解裡
-          <VideoAvatar videoRef={videoRef} state={state} size="full" visible={videoReady} />
+          <VideoAvatar
+            videoRef={videoRef}
+            state={state}
+            size="full"
+            visible={videoReady}
+            fullBody={composited}
+          />
         )}
       </div>
     );

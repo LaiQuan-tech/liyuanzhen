@@ -428,7 +428,13 @@ async function microphonePending(): Promise<boolean> {
     <div className="relative h-[100dvh] w-full overflow-hidden bg-ink text-white">
       {/* ⚠️ autoStart 只在這一頁開。/chat 也掛 AvatarStage，那邊自動連費用直接翻倍，
           而且 /chat 的主體本來就是文字，沒有臉也完全能用。
-          poster 是 avatar 的來源照片（真實攝影），為什麼不掛浮水印見 AvatarStage 的 props 註解。 */}
+
+          🔴 fullBody 與 poster 是綁在一起的一組，不要只改其中一個。
+          合成模式下 poster 會被縮到頭部那一格、跟串流疊在同一個位置，
+          所以它必須是**臉部置中**的那一版（avatar-poster-centered.jpg，
+          臉在 50%）。傳回原本的 avatar-poster.jpg（臉在 32%）的話，
+          串流接上的瞬間臉會往下跳一截。理由與對位方法見
+          components/avatar/full-body-stage.tsx 的檔頭。 */}
       <AvatarStage
         ref={stageRef}
         state={avatarStateFor(state)}
@@ -438,7 +444,8 @@ async function microphonePending(): Promise<boolean> {
         onTeardown={handleTeardown}
         onSpeechFailed={handleSpeechFailed}
         autoStart
-        poster="/avatar-poster.jpg"
+        fullBody
+        poster="/avatar-poster-centered.jpg"
       />
 
       {/* 加了 ?debug=1 才會出現。平常一個像素都不佔。 */}
