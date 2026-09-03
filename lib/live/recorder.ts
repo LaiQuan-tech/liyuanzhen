@@ -26,14 +26,31 @@ import { trace } from "@/lib/trace";
  * 這個分界是這次重寫的重點，不要為了讓音量計更準而把它移回關鍵路徑。
  */
 
-/** 跟 /api/stt 的上限一致。按住不放時自動收手，避免無上限地吃額度。 */
-export const MAX_RECORDING_SECONDS = 30;
+/**
+ * 錄音上限。到點自動收手（`onAutoStop` → LiveStage 的 `release()`），
+ * 避免無上限地吃額度。
+ *
+ * 🔴 2026-09-03 從 30 秒改成 45 秒，因為互動從「按住說話」改成「點一下切換」。
+ * 按住式有人的手當上限——手一放就結束了；切換式允許「按了就走開」，
+ * 這個計時器從次要的保險變成**唯一**的收手機制。45 秒對「講一個問題」夠用。
+ *
+ * ⚠️ 改這個數字要同時看三個地方，少一個就會壞：
+ *   1. `app/api/stt/route.ts` 的 `MAX_AUDIO_BYTES`——Safari 的 AAC 不理
+ *      `audioBitsPerSecond`（那是建議不是保證），實測 64~128kbps，
+ *      45 秒最壞情況約 720KB。上限沒跟著調，iPhone 的長問題會吃 413，
+ *      而畫面上只看得到「失敗」，看不出原因。
+ *   2. `components/avatar/AvatarStage.tsx` 的 `IDLE_MS`（75 秒）——錄音期間
+ *      沒有任何 reportActivity 的話，計費中的 session 會在訪客講話時被收掉。
+ *      LiveStage 因此在錄音期間節流呼叫 `reportActivity()`。
+ *   3. `content/site.ts` 的 `recordingNearCap` 文案（裡面寫著秒數）。
+ */
+export const MAX_RECORDING_SECONDS = 45;
 
 /** 太短的一律當成誤觸。0.2 秒以下連一個字都講不完。 */
 export const MIN_RECORDING_SECONDS = 0.2;
 
 /**
- * 壓縮位元率。24kbps 的 opus 對語音辨識綽綽有餘，30 秒約 90KB。
+ * 壓縮位元率。24kbps 的 opus 對語音辨識綽綽有餘，45 秒約 135KB。
  *
  * ⚠️ 這個數字同時決定伺服器那邊的位元組上限（見 app/api/stt/route.ts），
  * 兩邊要一起改。調高的話上限也要跟著調，否則正常長度的錄音會被 413 擋掉。
@@ -157,7 +174,7 @@ export interface Recorder {
 }
 
 export interface RecorderHooks {
-  /** 按住撞到 30 秒上限，自動收手 */
+  /** 撞到錄音上限（MAX_RECORDING_SECONDS），自動收手 */
   onAutoStop?: () => void;
   /** 錄音期間持續回報音量（0~1）。純視覺，不參與任何判斷。 */
   onLevel?: (rms: number) => void;
@@ -325,7 +342,7 @@ export function createRecorder(hooks: RecorderHooks = {}): Recorder {
     startMeter(captured);
     trace("開始錄音", `${recorder.mimeType}、${Date.now() - pressedAt}ms`);
 
-    // 按住不放的保險。伺服器那邊也有上限，這裡先收手是為了不要白錄。
+    // 忘記按第二下的保險。伺服器那邊也有上限，這裡先收手是為了不要白錄。
     capTimer = setTimeout(() => {
       capTimer = null;
       if (active) hooks.onAutoStop?.();

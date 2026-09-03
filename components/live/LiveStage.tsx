@@ -20,6 +20,7 @@ import {
   avatarStateFor,
   canStartRecording,
   isBusy,
+  talkButtonAction,
   type TurnPhase,
 } from "@/lib/live/state";
 import { resolveProvider } from "@/lib/avatar";
@@ -65,7 +66,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * 全螢幕的數位李元貞。按住說話，她用自己的聲音與臉回答。
+ * 全螢幕的數位李元貞。點一下說話，她用自己的聲音與臉回答。
  *
  * 鏈路：麥克風 → WAV → /api/stt → /api/chat（RAG ＋ answer-guard）
  *      → /api/tts（她的克隆聲）→ LiveAvatar 對嘴
@@ -107,6 +108,23 @@ export default function LiveStage() {
    */
   const autoStopRef = useRef<() => void>(() => {});
   /**
+   * 這一次錄音是什麼時候開始的（`Date.now()`）。沒在錄音就是 null。
+   *
+   * ⚠️ 用 ref 不用 state：它只在事件處理當下被讀一次，拿來判斷
+   * 「這一下點擊是不是連點的第二下」。放進 state 會讓每次 render 都多一個
+   * 沒人看的值，而且讀到的可能是上一輪 render 的舊值。
+   */
+  const recordingStartedAtRef = useRef<number | null>(null);
+  /**
+   * `recording` 的鏡像。
+   *
+   * ⚠️ `release()` 是 `useCallback(..., [runTurn])`，把 `recording` 加進 deps
+   * 會讓它每次錄音狀態變化就換一個新的函式實體，而 `autoStopRef.current`
+   * 是在 render 期間賦值的——兩者一起會出現「計時器抓到舊的 release」。
+   * 用鏡像 ref 讀就沒有這個問題。
+   */
+  const recordingRef = useRef(false);
+  /**
    * 這一輪的序號。
    *
    * ⚠️ `release()` 與 `runTurn()` 都是非同步的，而使用者隨時可以再按一次。
@@ -117,6 +135,8 @@ export default function LiveStage() {
   const turnRef = useRef(0);
 
   const state = deriveLiveState({ recording, phase, speaking, errored: Boolean(notice) });
+  /** 最後 10 秒。到點會自動送出，所以要先講，而且要倒數。 */
+  const nearCap = elapsed >= MAX_RECORDING_SECONDS - 10;
 
   useEffect(() => {
     sessionIdRef.current =
@@ -139,7 +159,7 @@ export default function LiveStage() {
 
     const recorder = createRecorder({
       onAutoStop: () => {
-        // 按住不放撞到 30 秒上限。當成放開處理，不要無聲地丟掉他講的話。
+        // 撞到錄音上限（45 秒）。當成按了第二下處理，不要無聲地丟掉他講的話。
         autoStopRef.current();
       },
       // 即時音量。⚠️ 一定要走 smoothLevel（峰值保持 ＋ 衰減），不要直接餵瞬時值：
@@ -161,7 +181,24 @@ export default function LiveStage() {
       return;
     }
     const startedAt = Date.now();
-    const id = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 200);
+    /**
+     * ⚠️ 順手在這裡節流回報活動。
+     *
+     * `AvatarStage` 的閒置計時器是 75 秒，而錄音上限從 30 秒放寬到 45 秒之後，
+     * 「按下 → 錄滿 → STT 回來」最長約 47 秒，離 75 秒只剩 28 秒的餘裕。
+     * 錄音期間本來一個 reportActivity 都沒有（下一次要等逐字稿回來），
+     * 所以再放寬上限就會出現「訪客正在講話，計費中的 session 被收掉」。
+     * 20 秒一次就夠，不要每 200ms 都打——那只是讓計時器空轉。
+     */
+    let lastPing = startedAt;
+    const id = setInterval(() => {
+      const now = Date.now();
+      setElapsed((now - startedAt) / 1000);
+      if (now - lastPing >= 20_000) {
+        lastPing = now;
+        stageRef.current?.reportActivity();
+      }
+    }, 200);
     return () => clearInterval(id);
   }, [recording]);
 
@@ -298,8 +335,18 @@ async function microphonePending(): Promise<boolean> {
   const release = useCallback(async () => {
     const recorder = recorderRef.current;
     if (!recorder) return;
+    // 🔴 沒在錄音就什麼都不要做。
+    //
+    // 按住式的時候這道守門不需要——pointerup 一定跟在 pointerdown 後面。
+    // 切換式下就不是了：任何一次跑到這裡而麥克風其實沒開的情況，
+    // `recorder.stop()` 會回 `{kind:"aborted"}`，於是畫面噴出一句
+    // 「按住不放，講完再放開」——一句跟他剛做的動作完全無關的話。
+    // 分派層（talkButtonAction）已經擋過一次，這是第二道。
+    if (!recordingRef.current) return;
 
     const turn = turnRef.current;
+    recordingRef.current = false;
+    recordingStartedAtRef.current = null;
     setRecording(false);
     const outcome = await recorder.stop();
     // ⚠️ 使用者已經按下一輪了 → 這一輪的訊息一個字都不要寫回畫面
@@ -376,10 +423,14 @@ async function microphonePending(): Promise<boolean> {
     // 音量計不出現——使用者按下去看到畫面完全沒動，結論只會是「壞了」，
     // 然後放開再按一次，於是連正常的那一輪也被自己中斷。
     // 麥克風確實正在開，畫面就該這樣說；真的開不起來下面會改回來並說明原因。
+    recordingRef.current = true;
+    recordingStartedAtRef.current = Date.now();
     setRecording(true);
     try {
       await recorderRef.current?.start();
     } catch (error) {
+      recordingRef.current = false;
+      recordingStartedAtRef.current = null;
       setRecording(false);
       trace("麥克風開不起來", String(error), "error");
       if (error instanceof MicrophoneError) {
@@ -395,6 +446,28 @@ async function microphonePending(): Promise<boolean> {
       setNotice(liveCopy.micUnavailable);
     }
   }, [speaking, state]);
+
+  /**
+   * 點一下說話按鈕。
+   *
+   * 🔴 2026-09-03 從「按住說話」改成這個。按住式對手滑毫無容錯：手指移開
+   * 按鈕範圍一點點就送出半句話，而且它還有一個**每個新訪客必踩**的洞——
+   * 第一次按住會跳出麥克風權限詢問，要按「允許」就得先放開按鈕，
+   * 於是第一次嘗試注定被判成 aborted（見 liveCopy.micNeedsAllow 的註解）。
+   * 切換式兩個問題都沒有。
+   *
+   * ⚠️ 判斷本身在 `talkButtonAction()`（lib/live/state.ts），不要搬回這裡：
+   * 這個檔案裡的任何東西都沒有測試（vitest 是 node 環境、沒有 jsdom，
+   * 專案裡連一個 .test.tsx 都沒有），搬進來等於把判斷放到測不到的地方。
+   */
+  const toggle = useCallback(() => {
+    const startedAt = recordingStartedAtRef.current;
+    const action = talkButtonAction(state, startedAt === null ? null : Date.now() - startedAt);
+    if (action === "start") void press();
+    else if (action === "stop") void release();
+    // "ignore"：連點的第二下，或伺服器往返中。刻意什麼都不做，
+    // 也刻意**不**顯示提示——那一下對使用者來說不是一個「失敗」。
+  }, [press, release, state]);
 
   /**
    * 影像還在、聲音沒出來。
@@ -463,7 +536,16 @@ async function microphonePending(): Promise<boolean> {
       </header>
 
       {/* 底部：字幕、免責、按鈕、揭露 */}
-      <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-ink via-ink/85 to-transparent px-4 pb-5 pt-16 sm:px-6">
+      {/*
+        ⚠️ `paddingBottom` 帶 `env(safe-area-inset-bottom)`：按鈕原本 pb-5 貼著
+        畫面下緣，在 iPhone 上剛好落在 home indicator 那一帶——那是手勢區，
+        單手拇指按下去有一半機率被系統吃掉，這是「不好按」的另一半原因。
+        ⚠️ 漸層的 pt 跟著加高（16 → 20），不然按鈕上移之後會浮在她小腿中間。
+      */}
+      <div
+        className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-ink via-ink/85 to-transparent px-4 pt-20 sm:px-6"
+        style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.75rem)" }}
+      >
         <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 text-center">
           {/*
             ⚠️ 這一行原本是 13px、55% 白，壓在 17~20px 的答案上方——等於沒有。
@@ -507,37 +589,39 @@ async function microphonePending(): Promise<boolean> {
 
           <button
             type="button"
-            // Pointer Events 一套搞定滑鼠與觸控。
-            // setPointerCapture：手指按住之後滑出按鈕範圍，pointerup 仍然收得到——
-            // 少了它，使用者一邊講一邊手滑，麥克風就永遠關不掉。
-            onPointerDown={(event) => {
-              // ⚠️ setPointerCapture 會在 pointerId 已經不是「作用中的指標」時
-              // 丟 NotFoundError。它原本是這個 handler 的第一行，例外一丟，
-              // 下面的 press() 整個不會執行——按鈕靜默失效，畫面上一點反應都沒有，
-              // 也沒有任何錯誤訊息。實測時真的踩到。
-              //
-              // 指標捕捉只是「手指滑出按鈕範圍仍收得到 pointerup」的優化，
-              // 不是錄音的前提條件。它失敗就算了，不可以拖著錄音一起死。
-              try {
-                event.currentTarget.setPointerCapture(event.pointerId);
-              } catch {
-                // 沒捕捉到就沒捕捉到，pointerup 仍然會在按鈕上觸發
-              }
-              void press();
-            }}
-            onPointerUp={() => void release()}
-            onPointerCancel={() => void release()}
-            // 長按在行動裝置上會跳出選單，把 pointerup 吃掉
+            // 🔴 只綁 onClick。
+            //
+            // 前一版是 onPointerDown 開始 / onPointerUp 送出（按住說話），連帶還有
+            // 一段 try/catch 包著的 setPointerCapture。那一整套已經拿掉了，理由：
+            //
+            // 1. 手滑。手指移開按鈕範圍一點點就送出半句話，而 setPointerCapture
+            //    只能減輕不能消除（它自己也會丟 NotFoundError）。
+            // 2. 每個新訪客的第一次都注定失敗——按住會跳麥克風權限詢問，
+            //    要按「允許」就必須先放開按鈕（見 liveCopy.micNeedsAllow）。
+            // 3. 🔴 **鍵盤完全按不到這顆按鈕。** Enter/Space 觸發的是 click，
+            //    不會產生 pointer 事件，所以舊版對鍵盤使用者是死的。改成
+            //    onClick 順手修掉這件事，不需要另外寫 onKeyDown。
+            //
+            // ⚠️ 不要「順手」把 pointer 事件加回來當備援——click 在觸控上本來就
+            // 由 pointer 事件合成，兩套一起綁會讓每一下變成兩次。
+            onClick={toggle}
+            // 長按在行動裝置上會跳出選單。切換式已經不需要 pointerup，
+            // 但選單彈出來會遮住畫面、也讓人以為按錯了，所以還是擋掉。
             onContextMenu={(event) => event.preventDefault()}
             disabled={isBusy(state)}
             aria-pressed={recording}
             className={[
-              "touch-none select-none rounded-full px-10 py-4 font-display text-[17px] font-bold",
+              // ⚠️ 尺寸是刻意放大的：原本 px-10 py-4（約 52px 高）貼在畫面下緣，
+              // 使用者回報「不好按、會手滑」。現在最小 64px 高，寬度也給足。
+              "min-h-16 touch-none select-none rounded-full px-12 py-5 font-display text-[19px] font-bold",
               "transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45",
               recording
                 ? "scale-105 bg-white text-ink"
                 : "bg-brand text-white hover:brightness-110 active:scale-95",
             ].join(" ")}
+            // ⚠️ 長按不要跳 iOS 的「拷貝／查詢」氣泡。Tailwind 的 select-none
+            // 只管文字選取，這個屬性才管那個氣泡。
+            style={{ WebkitTouchCallout: "none" }}
             // ⚠️ 這裡原本有一圈跟著音量脹縮的 boxShadow。音量計做出來之後把它拿掉了：
             // 它會擴散 44px，剛好把下面那排柱子糊在自己的灰影裡（實測截圖確認），
             // 而且兩個東西同時跟著音量跳只是噪音。證明「聲音有進來」的工作交給音量計，
@@ -569,13 +653,19 @@ async function microphonePending(): Promise<boolean> {
                   />
                 ))}
               </div>
+              {/*
+                ⚠️ 最後 10 秒改成倒數，不是繼續往上數。
+                切換式允許「按了就走開」，這個計時器是唯一的收手機制，
+                所以要先講、而且要講剩幾秒——被無預警切斷的人只會以為壞了。
+                （按住式不需要這麼早提醒，因為手一放就結束了。）
+              */}
               <p className="text-[12.5px] text-white/60" aria-live="polite">
-                {elapsed >= MAX_RECORDING_SECONDS - 5
-                  ? liveCopy.recordingNearCap
-                  : liveCopy.recordingHint}
+                {nearCap ? liveCopy.recordingNearCap : liveCopy.recordingHint}
                 {/* 秒數不進 aria-live——每秒唸一次數字對讀屏使用者是噪音 */}
                 <span aria-hidden="true" className="ml-2 tabular-nums text-white/45">
-                  {Math.floor(elapsed)} 秒
+                  {nearCap
+                    ? `還有 ${Math.max(0, Math.ceil(MAX_RECORDING_SECONDS - elapsed))} 秒`
+                    : `${Math.floor(elapsed)} 秒`}
                 </span>
               </p>
             </div>

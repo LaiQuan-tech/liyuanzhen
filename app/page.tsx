@@ -129,7 +129,7 @@ export default function HomePage() {
                   或是安靜地讀。
                 </>
               }
-              lead="「面對面問她」是全螢幕，按住說話，她用自己的聲音回答。「文字對話」是用打的，適合通勤、圖書館，或不方便出聲的時候。"
+              lead="「面對面問她」是全螢幕，點一下就開始說，她用自己的聲音回答。「文字對話」是用打的，適合通勤、圖書館，或不方便出聲的時候。"
             />
 
             <Reveal delay={0.1}>
@@ -402,7 +402,7 @@ export default function HomePage() {
             <Reveal>
               <h2 className="lz-h2">現在，換你問。</h2>
               <p className="lz-lead mx-auto mt-4 !text-ink-soft">
-                按住說話，她用自己的聲音回答。不方便出聲，就用文字。
+                點一下就開始說，她用自己的聲音回答。不方便出聲，就用文字。
               </p>
               <div className="mt-8 flex flex-wrap justify-center gap-3">
                 <Link href="/live" className="lz-cta">

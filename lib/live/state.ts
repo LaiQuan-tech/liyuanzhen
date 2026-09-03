@@ -13,7 +13,7 @@ import type { AvatarState } from "@/lib/avatar";
  */
 
 export type LiveState =
-  /** 待機。可以按住說話 */
+  /** 待機。點一下按鈕就開始錄音 */
   | "idle"
   /** 麥克風開著，訪客正在講 */
   | "recording"
@@ -36,14 +36,14 @@ export interface LiveFacts {
   phase: TurnPhase;
   /** driver 回報她正在發聲 */
   speaking: boolean;
-  /** 這一輪失敗了。下一次按住說話會清掉 */
+  /** 這一輪失敗了。下一次點按鈕會清掉 */
   errored: boolean;
 }
 
 /**
  * 優先序是有意義的，不是隨手排的：
  *
- * 1. `recording` 最大——訪客按住按鈕的當下，畫面必須立刻回應。
+ * 1. `recording` 最大——訪客點下按鈕的當下，畫面必須立刻回應。
  *    她還在講話時按下去就是要打斷她，這時顯示「回答中」是錯的。
  * 2. `speaking` 贏過 `phase`——串流還沒結束但她已經開口時要顯示「回答中」，
  *    跟 deriveAvatarState 同一個理由。
@@ -92,4 +92,44 @@ export function isRecording(state: LiveState): boolean {
 /** 伺服器往返中。這段時間按鈕要顯示為不可用，而不是假裝可以按。 */
 export function isBusy(state: LiveState): boolean {
   return state === "transcribing" || state === "thinking";
+}
+
+/**
+ * 兩次點擊之間的最小間隔。
+ *
+ * 🔴 切換式獨有的失敗模式：緊張的人會連點兩下。第二下如果被當成「送出」，
+ * 得到的是一段 0.3 秒的錄音，畫面回他「沒收到聲音」——而他的動作
+ * （點兩下）在按住式裡是完全正常的。所以開始後這段時間內的點擊要吞掉。
+ *
+ * ⚠️ 不要靠 `MIN_RECORDING_SECONDS`（0.2 秒）去擋。那一支是在**放開之後**
+ * 判斷結果，擋下來的代價是一句錯誤提示；這裡是在**按下的當下**就不理它，
+ * 錄音完全沒有被中斷。兩者是不同層的東西，都要有。
+ */
+export const TAP_DEBOUNCE_MS = 500;
+
+/** 切換式按鈕按下去之後該做什麼。 */
+export type TalkAction = "start" | "stop" | "ignore";
+
+/**
+ * 點一下說話按鈕的分派。
+ *
+ * 抽成純函式的理由很實際：`vitest.config.ts` 是 `environment: "node"`、
+ * `include: ["**\/*.test.ts"]`，專案裡沒有 jsdom 也沒有 React Testing Library，
+ * 所以 `LiveStage.tsx` 裡的任何東西**都測不到**。把判斷放在這裡，
+ * 它就跟 `deriveLiveState` 一樣有窮舉測試守著。
+ *
+ * @param msSinceStart 錄音開始到現在幾毫秒。沒在錄音就傳 null。
+ */
+export function talkButtonAction(state: LiveState, msSinceStart: number | null): TalkAction {
+  // 伺服器往返中。按鈕本來就 disabled，這裡是第二道——
+  // disabled 只擋滑鼠與鍵盤，程式化的 click 擋不住。
+  if (isBusy(state)) return "ignore";
+
+  if (isRecording(state)) {
+    if (msSinceStart !== null && msSinceStart < TAP_DEBOUNCE_MS) return "ignore";
+    return "stop";
+  }
+
+  // ⚠️ 這裡保留 canStartRecording 的語意不動：speaking 可以按（打斷她是刻意允許的）。
+  return canStartRecording(state) ? "start" : "ignore";
 }

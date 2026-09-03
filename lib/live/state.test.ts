@@ -5,7 +5,10 @@ import {
   canStartRecording,
   isRecording,
   isBusy,
+  talkButtonAction,
+  TAP_DEBOUNCE_MS,
   type LiveFacts,
+  type LiveState,
 } from "./state";
 
 const base: LiveFacts = { recording: false, phase: "idle", speaking: false, errored: false };
@@ -119,6 +122,71 @@ describe("isRecording / isBusy", () => {
     expect(isBusy("thinking")).toBe(true);
     for (const state of ["idle", "recording", "speaking", "error"] as const) {
       expect(isBusy(state), state).toBe(false);
+    }
+  });
+});
+
+describe("talkButtonAction（切換式按鈕的分派）", () => {
+  it("待機、講話中、上一輪出錯 → 開始錄音", () => {
+    for (const state of ["idle", "speaking", "error"] as const) {
+      expect(talkButtonAction(state, null), state).toBe("start");
+    }
+  });
+
+  it("錄音中 → 送出", () => {
+    expect(talkButtonAction("recording", 3000)).toBe("stop");
+  });
+
+  it("伺服器往返中 → 什麼都不做", () => {
+    // 按鈕上有 disabled，但那只擋滑鼠與鍵盤；程式化的 click 擋不住，
+    // 所以這裡必須是第二道。
+    for (const state of ["transcribing", "thinking"] as const) {
+      expect(talkButtonAction(state, null), state).toBe("ignore");
+    }
+  });
+
+  it("🔴 開始後 500ms 內的第二下要被吞掉，不可以送出", () => {
+    // 緊張的人會連點兩下。第二下被當成送出的話，他得到的是 0.3 秒的錄音
+    // 加一句「沒收到聲音」——而連點兩下在按住式裡是完全正常的動作。
+    expect(talkButtonAction("recording", 0)).toBe("ignore");
+    expect(talkButtonAction("recording", 120)).toBe("ignore");
+    expect(talkButtonAction("recording", TAP_DEBOUNCE_MS - 1)).toBe("ignore");
+  });
+
+  it("剛好到 500ms 就可以送出了", () => {
+    expect(talkButtonAction("recording", TAP_DEBOUNCE_MS)).toBe("stop");
+  });
+
+  it("錄音中但不知道開始多久（null）→ 照樣送出", () => {
+    // 不知道 ≠ 剛開始。ref 掉了就寧可讓他停得掉，
+    // 不然麥克風會關不掉，那比誤觸嚴重得多。
+    expect(talkButtonAction("recording", null)).toBe("stop");
+  });
+
+  it("窮舉：任何狀態都只會回三種動作之一，不會 undefined", () => {
+    const states: LiveState[] = [
+      "idle",
+      "recording",
+      "transcribing",
+      "thinking",
+      "speaking",
+      "error",
+    ];
+    for (const state of states) {
+      for (const ms of [null, 0, 499, 500, 30_000]) {
+        expect(["start", "stop", "ignore"], `${state} / ${ms}`).toContain(
+          talkButtonAction(state, ms)
+        );
+      }
+    }
+  });
+
+  it("只有 recording 會回 stop——其他狀態按了不會誤觸送出", () => {
+    // 🔴 這條守的是 release() 的 guard：切換式下按到 idle 的按鈕如果跑進
+    // release()，recorder.stop() 會回 aborted，畫面就噴一句莫名的
+    // 「按住不放，講完再放開」。分派層就不該讓它發生。
+    for (const state of ["idle", "transcribing", "thinking", "speaking", "error"] as const) {
+      expect(talkButtonAction(state, 3000), state).not.toBe("stop");
     }
   });
 });

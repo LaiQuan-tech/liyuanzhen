@@ -34,7 +34,7 @@ export default function TracePanel() {
           現場紀錄（網址去掉 ?debug=1 就不會出現）
         </div>
         {entries.length === 0 ? (
-          <div className="text-white/40">按住說話之後，這裡會逐條記錄每一段。</div>
+          <div className="text-white/40">點一下說話之後，這裡會逐條記錄每一段。</div>
         ) : (
           entries.map((entry, i) => (
             <div

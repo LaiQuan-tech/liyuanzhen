@@ -56,7 +56,7 @@ export interface AvatarStageHandle {
    * 告訴閒置計時器「使用者還在」。
    *
    * push/finish 內部已經會呼叫，這支是給**不經過它們**的互動用的——
-   * /live 的按住說話就是：訪客講了 10 秒，期間一個字都沒送進來，
+   * /live 的錄音就是：訪客講了 10 秒（切換式最長 45 秒），期間一個字都沒送進來，
    * 沒有這支的話閒置計時器會在他講話的時候把串流收掉。
    */
   reportActivity(): void;
@@ -276,9 +276,9 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
    * `teardown()` 會把 driverRef 清成 null 並 `destroy()`（destroy 之後那個物件
    * 永久失效），而 driver 原本只在掛載時建立一次。結果是**任何一次 teardown
    * 之後影像就再也回不來**——而 teardown 會在切到別的分頁時觸發。
-   * 它自己的註解與畫面上的「按住說話就可以重新開始」都是做不到的承諾。
+   * 它自己的註解與畫面上的「點一下按鈕就可以重新開始」都是做不到的承諾。
    *
-   * ⚠️ 這也表示 onFatal（含 SESSION_DISCONNECTED）之後，下一次按住說話會重新
+   * ⚠️ 這也表示 onFatal（含 SESSION_DISCONNECTED）之後，下一次點按鈕會重新
    * 建立 driver、重新開一個計費 session。那是刻意的：斷線本來就該能重來，
    * 而且它由使用者的手勢觸發，帳本那三道閘門仍然守著。
    */
@@ -442,7 +442,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
 
         // 伺服器說了算。⚠️ 提早 2 秒收手，讓我們自己乾淨地關掉 session，
         // 而不是等對方把連線切斷——後者在畫面上是「突然斷掉」，
-        // 前者才有機會顯示「連線已結束，按住說話可以重新開始」。
+        // 前者才有機會顯示「連線已結束，點一下按鈕可以重新開始」。
         const limit = sessionLimitRef.current;
         const capMs = limit ? Math.max(5_000, limit * 1000 - 2_000) : FALLBACK_CAP_MS;
         capRef.current = setTimeout(() => void teardown("撞到單次時間上限"), capMs);
