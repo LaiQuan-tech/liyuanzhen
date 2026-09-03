@@ -431,9 +431,8 @@ async function microphonePending(): Promise<boolean> {
 
           🔴 fullBody 與 poster 是綁在一起的一組，不要只改其中一個。
           合成模式下 poster 會被縮到頭部那一格、跟串流疊在同一個位置，
-          所以它必須是**臉部置中**的那一版（avatar-poster-centered.jpg，
-          臉在 50%）。傳回原本的 avatar-poster.jpg（臉在 32%）的話，
-          串流接上的瞬間臉會往下跳一截。理由與對位方法見
+          所以它必須是 avatar-poster-stage.jpg（原始真實照片、背景已對齊串流）。
+          換別張對位會整個跑掉。理由與對位方法見
           components/avatar/full-body-stage.tsx 的檔頭。 */}
       <AvatarStage
         ref={stageRef}
@@ -445,7 +444,7 @@ async function microphonePending(): Promise<boolean> {
         onSpeechFailed={handleSpeechFailed}
         autoStart
         fullBody
-        poster="/avatar-poster-centered.jpg"
+        poster="/avatar-poster-stage.jpg"
       />
 
       {/* 加了 ?debug=1 才會出現。平常一個像素都不佔。 */}

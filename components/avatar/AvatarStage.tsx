@@ -17,8 +17,8 @@ import { trace } from "@/lib/trace";
 import {
   FullBodyStage,
   FULL_BODY_SRC,
-  POSTER_BOX,
-  POSTER_MASK,
+  STAGE_BOX,
+  STAGE_MASK,
 } from "./full-body-stage";
 
 /**
@@ -116,10 +116,9 @@ interface Props {
    * 位置的即時串流。做這件事的理由、代價與對位方法全部寫在
    * ./full-body-stage.tsx 的檔頭，改動前先讀那份。
    *
-   * ⚠️ 這個模式**要求 poster 是臉部置中的那一版**
-   * （/avatar-poster-centered.jpg），因為 poster 與影片會疊在同一個位置上。
-   * 傳原本的 /avatar-poster.jpg 進來，串流接上的瞬間臉會往下跳一截——
-   * 那張的臉在畫面 32% 處，不是 50%。
+   * ⚠️ 這個模式**要求 poster 是 /avatar-poster-stage.jpg**——原始那張真實
+   * 照片、背景已經調成串流的 rgb(233,237,236)。poster 與影片疊在同一個框上，
+   * 換別張（例如原本的 /avatar-poster.jpg）對位與接縫都會跑掉。
    */
   fullBody?: boolean;
 }
@@ -582,8 +581,8 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
                 /*
                   合成模式：poster 只佔頭部那一格，位置與遮罩必須跟 VideoAvatar
                   裡的影片**完全一致**，否則串流接上的瞬間臉會位移或閃一下邊。
-                  兩邊poster 與影片的框刻意分開算（POSTER_BOX / VIDEO_BOX），
-                  因為兩張的構圖不同——共用一組反而會跳。
+                  兩邊poster 與影片共用 STAGE_BOX / STAGE_MASK，理由（實測輪廓只差 1~2px）
+                  寫在 full-body-stage.tsx 那組常數上。
                 */
                 <FullBodyStage>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -592,9 +591,9 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
                     alt=""
                     className="absolute object-cover"
                     style={{
-                      ...POSTER_BOX,
-                      maskImage: POSTER_MASK,
-                      WebkitMaskImage: POSTER_MASK,
+                      ...STAGE_BOX,
+                      maskImage: STAGE_MASK,
+                      WebkitMaskImage: STAGE_MASK,
                     }}
                   />
                 </FullBodyStage>
