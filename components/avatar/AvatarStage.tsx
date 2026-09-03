@@ -17,8 +17,8 @@ import { trace } from "@/lib/trace";
 import {
   FullBodyStage,
   FULL_BODY_SRC,
-  HEAD_BOX,
-  HEAD_MASK,
+  POSTER_BOX,
+  POSTER_MASK,
 } from "./full-body-stage";
 
 /**
@@ -582,7 +582,8 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
                 /*
                   合成模式：poster 只佔頭部那一格，位置與遮罩必須跟 VideoAvatar
                   裡的影片**完全一致**，否則串流接上的瞬間臉會位移或閃一下邊。
-                  兩邊共用 HEAD_BOX / HEAD_MASK 就是為了不讓這兩份數字各自漂移。
+                  兩邊poster 與影片的框刻意分開算（POSTER_BOX / VIDEO_BOX），
+                  因為兩張的構圖不同——共用一組反而會跳。
                 */
                 <FullBodyStage>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -591,9 +592,9 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
                     alt=""
                     className="absolute object-cover"
                     style={{
-                      ...HEAD_BOX,
-                      maskImage: HEAD_MASK,
-                      WebkitMaskImage: HEAD_MASK,
+                      ...POSTER_BOX,
+                      maskImage: POSTER_MASK,
+                      WebkitMaskImage: POSTER_MASK,
                     }}
                   />
                 </FullBodyStage>

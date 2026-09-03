@@ -3,7 +3,7 @@
 import type { RefObject } from "react";
 import { AVATAR_NAME } from "@/content/site";
 import type { AvatarState } from "@/lib/avatar/types";
-import { FullBodyStage, HEAD_BOX, HEAD_MASK } from "./full-body-stage";
+import { FullBodyStage, VIDEO_BOX, VIDEO_MASK } from "./full-body-stage";
 
 interface Props {
   state: AvatarState;
@@ -74,12 +74,12 @@ export default function VideoAvatar({
               autoPlay
               className="absolute object-cover"
               style={{
-                ...HEAD_BOX,
+                ...VIDEO_BOX,
                 // 下緣淡出，讓串流的肩膀融進底圖的肩膀。
                 // ⚠️ 兩個屬性都要寫：Safari 到現在仍然只認 -webkit- 那個，
                 // 少寫的話 iOS 上會看到一條橫的硬邊。
-                maskImage: HEAD_MASK,
-                WebkitMaskImage: HEAD_MASK,
+                maskImage: VIDEO_MASK,
+                WebkitMaskImage: VIDEO_MASK,
               }}
             />
           </FullBodyStage>
