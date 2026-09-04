@@ -10,7 +10,13 @@ import type { ReactNode } from "react";
  */
 
 export type { Pose } from "./poses";
-export { POSE_SEATED, POSE_STANDING, STAGE_MASK } from "./poses";
+export {
+  POSE_SEATED,
+  POSE_STANDING,
+  POSE_STANDING_STREET,
+  ALL_POSES,
+  STAGE_MASK,
+} from "./poses";
 
 /**
  * 9:16 的舞台框，置中。

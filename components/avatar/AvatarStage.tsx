@@ -544,6 +544,37 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     return (
       <div className="absolute inset-0 overflow-hidden bg-ink">
         {/*
+          滿版的場景背景（`/live3` 的街景）。鋪在所有東西之下。
+
+          🔴 **掛載條件用 `fullBody`，顯示條件用 `pose`**，兩者不同是刻意的：
+          - `pose`（＝ `fullBody && needsVideo`）在降級成 monogram 時會變成
+            undefined。那時候街景要一起消失——人不見了、街還在，畫面會是
+            一條空街上浮著一個「李」字，看起來像合成壞掉而不是刻意的降級。
+          - 但 `setProvider("monogram")` 是**執行期**觸發的（見上面斷線那段），
+            直接卸載會讓整片街景在一格內變黑，更像當機。所以保持掛載、
+            用 opacity 過渡，跟底下的交叉淡入同樣 700ms。
+
+          ⚠️ `bg-ink` 保留不動。黑邊的成因不是它存在，是沒有東西蓋住它；
+          這一層 `absolute inset-0` 蓋滿之後它自動看不見。留著換到三件事：
+          背景板解碼前不會閃出 body 的淡紫 `--bg`（而這張板子就是 LCP）、
+          降級時的正確底色、板子 404 時的正確底色。
+
+          ⚠️ 不要加 `loading="lazy"`：這一頁同時在搶四秒內開起計費 session，
+          背景板要跟 HTML 一起被 preload scanner 抓到。
+        */}
+        {fullBody?.background && (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={fullBody.background}
+            alt=""
+            fetchPriority="high"
+            decoding="async"
+            className="absolute inset-0 h-full w-full object-cover transition-opacity duration-700"
+            style={{ opacity: pose ? 1 : 0 }}
+          />
+        )}
+
+        {/*
           全身底圖。刻意鋪在交叉淡入的兩層**之下**，而且整頁只有這一份。
 
           ⚠️ 不要為了寫起來順手而把它塞進下面任何一層：放進去的話身體會跟著
@@ -609,6 +640,12 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
                 🔴 合成模式下這條**更**不能拿掉：底下那張全身圖的胸部以下是
                 AI 生成的，不是她本人的照片。整個畫面裡真正屬於真實攝影的
                 只有頭部那一小塊。
+
+                🔴 `/live3` 把背景換成真實街景之後，這件事的風險又升一級：
+                棚拍背景一看就知道是製作出來的，但貼上街景之後整張畫面會被讀成
+                「一張她站在某條真實街道上的照片」。而首頁那張是**她本人真的
+                站在那面牆前**，兩者只隔一次點擊、隔著同一面牆。
+                這條浮水印是唯一在畫面上說明差別的東西。
 
                 ⚠️ 樣式與 top-16 要跟 VideoAvatar 那份一致，否則兩層交叉淡入時
                 浮水印會在畫面上跳一下。改一邊記得改另一邊。

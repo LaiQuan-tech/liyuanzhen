@@ -94,9 +94,19 @@ export default function Nav() {
       {open && (
         <div
           id="mobile-nav"
-          className="absolute inset-x-0 top-full border-b-2 border-ink bg-paper shadow-sticker-lg lg:hidden"
+          className="absolute inset-x-0 top-full max-h-[calc(100dvh-4.5rem)] overflow-y-auto overscroll-contain border-b-2 border-ink bg-paper shadow-sticker-lg lg:hidden"
         >
-          {/* 刻意不做 body scroll lock：六列在任何手機視窗都放得下，少一個會壞的東西 */}
+          {/*
+            🔴 原本這裡寫「六列在任何手機視窗都放得下，所以刻意不做 scroll lock」。
+            加了 /live3 之後是**七列**，那個假設失效了：每列 h-12 ＋ border 1px
+            = 49px，七列 343 ＋ p-4(32) ＋ .lz-cta(≈54) ＋ header(≈70) ≈ 499px，
+            而 320×568 的舊 iPhone SE 可用高度只有約 460px。
+            失敗方式很糟：面板是 sticky header 底下的 `absolute top-full`，
+            溢出的那幾列**永遠捲不進來**，「隱私權」會變成手機上到不了的頁面。
+            所以改成面板自己可捲（`max-h` ＋ `overflow-y-auto`）。
+            ⚠️ 仍然不做 body scroll lock——那是另一件會壞的東西，
+            `overscroll-contain` 已經擋住捲動穿透。
+          */}
           {[...nav, ...footerLinks].map((item) => (
             <Link
               key={item.href}

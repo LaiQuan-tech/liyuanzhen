@@ -103,9 +103,14 @@ export default function VideoAvatar({
           而「浮水印看不見」等於這道護欄不存在。要改上緣位置的話，
           記得同時看一眼 components/live/LiveStage.tsx 的 header 高度。
 
-          ⚠️ 這條**刻意留在舞台框外面**（貼著視窗右緣，不是貼著全身舞台的右緣）。
+          ⚠️ 這條**刻意貼著視窗右緣，不是貼著全身舞台的右緣**。
           全身模式下舞台框在寬螢幕上比視窗窄，跟著框走會讓浮水印縮到畫面中央，
           離那張臉更遠也更容易被忽略。
+
+          🔴 2026-09-04 更新理由（`/live3` 加了滿版街景之後）：以前框外是純色
+          黑邊，浮水印貼在那裡其實沒有標記到任何影像；現在**整個視窗都是同一張
+          AI 合成圖**（去背的她 ＋ 街景背景板），貼齊視窗才是正確的標記範圍。
+          位置沒變，但成立的理由變了——不要因為「黑邊沒了」就把它移進框裡。
         */}
         <span className="pointer-events-none absolute right-3 top-16 rounded-full bg-ink/80 px-3 py-1 text-[11px] font-bold tracking-wide text-white backdrop-blur-sm">
           AI 生成影像
