@@ -3,7 +3,7 @@ import LiveStage from "@/components/live/LiveStage";
 import { POSE_STANDING } from "@/components/avatar/full-body-stage";
 
 export const metadata: Metadata = {
-  title: "面對面問她（站姿）｜李元貞 × AI 數位人",
+  title: "虛擬互動（站姿）｜李元貞 × AI 數位人",
 };
 
 /**
@@ -15,10 +15,9 @@ export const metadata: Metadata = {
  * ANSWER_DISCLAIMER、SITE_NOTICE 與影片上的常駐浮水印全部放回畫面上。
  * 那不是可選的裝飾，見該元件的檔頭。
  *
- * 🔴 這一頁**沒有**從導覽列或首頁連過來，是刻意的：一般訪客只該看到一個
- * 「面對面問她」的入口，多一個會讓人不知道該點哪個。這一頁靠網址直接進，
- * 用途是拿給人看另一個版本。要對外開放的話，components/Nav.tsx、
- * app/page.tsx 的三處 CTA 與 app/sitemap.ts 都要一起加。
+ * 導覽列有這一項（「虛擬互動（站姿）」），sitemap 也有。
+ * ⚠️ 但首頁與活動頁的 CTA 按鈕仍然指向 /live——主行動只能有一個，
+ * 兩顆一樣大的按鈕等於沒有主行動。
  *
  * 🔴 兩頁各自會開一個**計費中**的 LiveAvatar session。同時開著就是兩份錢。
  */

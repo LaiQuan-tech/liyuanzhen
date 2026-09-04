@@ -3,7 +3,7 @@ import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 
-export const metadata: Metadata = { title: "關於這個 AI｜李元貞 × AI 數位人" };
+export const metadata: Metadata = { title: "資訊聲明｜李元貞 × AI 數位人" };
 
 const FACTS = [
   {
@@ -41,7 +41,7 @@ export default function AboutAiPage() {
     <>
       <Nav />
       <main className="lz-wrap py-12 md:py-16">
-        <span className="lz-eyebrow">關於這個 AI</span>
+        <span className="lz-eyebrow">資訊聲明</span>
         <h1 className="lz-h2 mt-4">
           用她的名字說話，
           <br />

@@ -77,10 +77,10 @@ export default function HomePage() {
               </p>
               <div className="mt-8 flex flex-wrap gap-3">
                 <Link href="/live" className="lz-cta">
-                  面對面問她 →
+                  虛擬互動 →
                 </Link>
                 <Link href="/chat" className="lz-cta-ghost">
-                  改用文字對話
+                  改用文字對談
                 </Link>
               </div>
               <p className="mt-4 text-[13px] text-ink-soft/90">
@@ -129,7 +129,7 @@ export default function HomePage() {
                   或是安靜地讀。
                 </>
               }
-              lead="「面對面問她」是全螢幕，點一下就開始說，她用自己的聲音回答。「文字對話」是用打的，適合通勤、圖書館，或不方便出聲的時候。"
+              lead="「虛擬互動」是全螢幕，點一下就開始說，她用自己的聲音回答。「文字對談」是用打的，適合通勤、圖書館，或不方便出聲的時候。"
             />
 
             <Reveal delay={0.1}>
@@ -174,28 +174,17 @@ export default function HomePage() {
         {/* ── 3. 她是誰 ────────────────────────────────────────── */}
         <section className="lz-section border-y-2 border-ink bg-dusk-wash">
           <div className="lz-wrap">
-            <SectionHead
-              eyebrow="她是誰"
-              title={
-                <>
-                  中文系教授，
-                  <br />
-                  也是台灣婦運的起點之一。
-                </>
-              }
-            />
+            <SectionHead eyebrow="她是誰" title="《我來了！臺灣婦女改變了》" />
 
             <Reveal delay={0.08}>
               <div className="mt-6 max-w-[720px] space-y-4 text-[15.5px] leading-relaxed text-ink-soft">
                 <p>
-                  李元貞，1946 年生於雲南昆明，1949 年隨父母來台，在高雄左營的軍眷區長大，
-                  1964 年自花蓮女中畢業。台大中文系學士、碩士，1971 年起在淡江大學中文系任教三十餘年。
+                  這本自傳以「詩」串起李元貞一段段生命經歷，讓讀者理解她早期的生命經驗，
+                  如何成為後來從事婦女運動的巨大推力。從住在左營的眷村歲月、移居花蓮的中學時期、
+                  遷居北部求學和工作，以及離婚後得不到女兒監護權，憤而推動民法修法，
+                  一直到退休隱居花蓮，仍在撰寫《眾女成城》的歷程剪影。
                 </p>
-                <p>
-                  1982 年她創辦《婦女新知》雜誌社，1987 年改組為婦女新知基金會並出任第一屆董事長。
-                  2005 年她未達屆齡就主動從淡江退休，遷居花蓮，花了近九年寫成《眾女成城》。
-                  2023 年，她把花蓮住所的 1,200 冊藏書全數捐給國立東華大學圖書館，設立「李元貞文庫」。
-                </p>
+                <p>一起進入李元貞的婦女運動和文學創作之路。</p>
               </div>
             </Reveal>
 
@@ -282,7 +271,7 @@ export default function HomePage() {
               </p>
               <div className="mt-5">
                 <Link href="/live" className="lz-cta">
-                  想聽她自己講？面對面問她 →
+                  想聽她自己講？虛擬互動 →
                 </Link>
               </div>
             </Reveal>
@@ -406,10 +395,10 @@ export default function HomePage() {
               </p>
               <div className="mt-8 flex flex-wrap justify-center gap-3">
                 <Link href="/live" className="lz-cta">
-                  面對面問她 →
+                  虛擬互動 →
                 </Link>
                 <Link href="/chat" className="lz-cta-ghost">
-                  文字對話
+                  文字對談
                 </Link>
               </div>
               <p className="mt-8 text-[13.5px] text-ink-soft">

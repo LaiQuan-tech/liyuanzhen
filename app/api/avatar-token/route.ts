@@ -69,7 +69,7 @@ function sessionIdFromToken(token: string): string | null {
 /** at_capacity 是唯一「等一下就會好」的拒絕，UI 要顯示排隊而不是錯誤。 */
 const DENIAL_MESSAGE: Record<string, string> = {
   at_capacity: "現在同時對話的人比較多，請稍等一下再開啟語音。",
-  budget_exhausted: "本月的語音額度已用完，仍然可以用文字對話。",
+  budget_exhausted: "本月的語音額度已用完，仍然可以用文字對談。",
   disabled: "語音功能目前未開啟。",
 };
 

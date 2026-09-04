@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import LiveStage from "@/components/live/LiveStage";
 
 export const metadata: Metadata = {
-  title: "面對面問她｜李元貞 × AI 數位人",
+  title: "虛擬互動｜李元貞 × AI 數位人",
 };
 
 /**

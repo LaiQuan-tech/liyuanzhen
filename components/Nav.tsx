@@ -10,7 +10,7 @@ import { nav, footerLinks } from "@/content/site";
  *
  * ⚠️ 這是 client component，而且**不要**改回用 `<details>` / `<summary>` 的純 CSS 版。
  * `open` 是未受控的 DOM 屬性，App Router 換頁時 React 會重用同一個節點，
- * 結果是**選單不會關**——點「文字對話」跳頁之後它還開著。
+ * 結果是**選單不會關**——點「文字對談」跳頁之後它還開著。
  * 這個元件很小，而且 /live 根本不掛 Nav，client 化的代價可以忽略。
  *
  * lg 以下原本**完全沒有選單**，四個導覽連結全部消失，只剩一顆按鈕——
@@ -58,7 +58,7 @@ export default function Nav() {
           {/* 主行動是 /live，不是 /chat */}
           <Link href="/live" className="lz-cta !px-4 !py-2 !text-[13.5px] lg:hidden">
             <span className="sm:hidden">問她</span>
-            <span className="hidden sm:inline">面對面問她</span>
+            <span className="hidden sm:inline">虛擬互動</span>
           </Link>
 
           <button
@@ -108,7 +108,7 @@ export default function Nav() {
           ))}
           <div className="p-4">
             <Link href="/live" className="lz-cta w-full justify-center !flex">
-              面對面問她 →
+              虛擬互動 →
             </Link>
           </div>
         </div>
