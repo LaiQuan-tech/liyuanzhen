@@ -3,7 +3,7 @@
 import type { RefObject } from "react";
 import { AVATAR_NAME } from "@/content/site";
 import type { AvatarState } from "@/lib/avatar/types";
-import { FullBodyStage, STAGE_BOX, STAGE_MASK } from "./full-body-stage";
+import { FullBodyStage, STAGE_MASK, type Pose } from "./full-body-stage";
 
 interface Props {
   state: AvatarState;
@@ -31,8 +31,12 @@ interface Props {
    * 底圖本身**不在這個元件裡**——它由 AvatarStage 鋪在交叉淡入的兩層底下，
    * 這樣淡入淡出時身體不會跟著一起變淡。整套的限制與對位方法寫在
    * ./full-body-stage.tsx 的檔頭，改動前先讀那份。
+   *
+   * ⚠️ 這裡收的是**姿勢物件不是布林**。`/live` 是坐姿、`/live2` 是站姿，
+   * 兩者的影片框位置不同（她在兩張圖裡離鏡頭遠近不一樣），所以框要跟著姿勢走。
+   * 遮罩不用跟——那組百分比是不變量，理由寫在 STAGE_MASK 上面。
    */
-  fullBody?: boolean;
+  fullBody?: Pose;
 }
 
 /**
@@ -74,7 +78,7 @@ export default function VideoAvatar({
               autoPlay
               className="absolute object-cover"
               style={{
-                ...STAGE_BOX,
+                ...fullBody.box,
                 // 下緣淡出，讓串流的肩膀融進底圖的肩膀。
                 // ⚠️ 兩個屬性都要寫：Safari 到現在仍然只認 -webkit- 那個，
                 // 少寫的話 iOS 上會看到一條橫的硬邊。

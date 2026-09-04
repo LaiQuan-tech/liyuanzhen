@@ -14,12 +14,7 @@ import { createAvatarDriver, resolveProvider } from "@/lib/avatar";
 import type { AvatarDriver, AvatarProvider, AvatarState } from "@/lib/avatar";
 import { createIdleTimer } from "@/lib/idle-timer";
 import { trace } from "@/lib/trace";
-import {
-  FullBodyStage,
-  FULL_BODY_SRC,
-  STAGE_BOX,
-  STAGE_MASK,
-} from "./full-body-stage";
+import { FullBodyStage, STAGE_MASK, type Pose } from "./full-body-stage";
 
 /**
  * VideoAvatar 只在瀏覽器端載入。Phase 2 之後這條路會把 livekit / webrtc-adapter
@@ -116,11 +111,12 @@ interface Props {
    * 位置的即時串流。做這件事的理由、代價與對位方法全部寫在
    * ./full-body-stage.tsx 的檔頭，改動前先讀那份。
    *
-   * ⚠️ 這個模式**要求 poster 是 /avatar-poster-stage.jpg**——原始那張真實
-   * 照片、背景已經調成串流的 rgb(233,237,236)。poster 與影片疊在同一個框上，
-   * 換別張（例如原本的 /avatar-poster.jpg）對位與接縫都會跑掉。
+   * ⚠️ 收的是**姿勢物件不是布林**（`POSE_SEATED` / `POSE_STANDING`）。
+   * 底圖、poster、影片框三樣綁在同一個物件裡，就是為了不讓它們各自漂移——
+   * 換底圖忘了換 poster 的話，串流接上的瞬間臉會跳而畫面上看不出原因。
+   * 呼叫端要用 `pose.poster` 傳 poster，不要自己寫死字串。
    */
-  fullBody?: boolean;
+  fullBody?: Pose;
 }
 
 const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
@@ -134,7 +130,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     onSpeechFailed,
     autoStart = false,
     poster,
-    fullBody = false,
+    fullBody,
   },
   ref
 ) {
@@ -541,7 +537,9 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
      * 臉是**不會動**的，這時候鋪一張她的全身照上去，等於用一張靜態照片
      * 假裝數位人還在——比單純顯示「李」字標記更會誤導人。
      */
-    const composited = fullBody && needsVideo;
+    // ⚠️ 用一個變數同時當「要不要合成」與「用哪一組幾何」。
+    // 分成 boolean ＋ 物件兩個變數的話，總有一天會出現「開著合成但幾何是舊的」。
+    const pose = fullBody && needsVideo ? fullBody : undefined;
 
     return (
       <div className="absolute inset-0 overflow-hidden bg-ink">
@@ -552,11 +550,11 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
           臉一起淡入淡出，而且兩層同時半透明的那一瞬間，整個人會暗一下
           （0.5 疊 0.5 不等於 1）。身體是靜態的，本來就不該參與交叉淡入。
         */}
-        {composited && (
+        {pose && (
           <FullBodyStage>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={FULL_BODY_SRC}
+              src={pose.src}
               alt=""
               className="absolute inset-0 h-full w-full object-cover"
             />
@@ -577,7 +575,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
           */}
           {poster && needsVideo ? (
             <>
-              {composited ? (
+              {pose ? (
                 /*
                   合成模式：poster 只佔頭部那一格，位置與遮罩必須跟 VideoAvatar
                   裡的影片**完全一致**，否則串流接上的瞬間臉會位移或閃一下邊。
@@ -591,7 +589,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
                     alt=""
                     className="absolute object-cover"
                     style={{
-                      ...STAGE_BOX,
+                      ...pose.box,
                       maskImage: STAGE_MASK,
                       WebkitMaskImage: STAGE_MASK,
                     }}
@@ -633,7 +631,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
             state={state}
             size="full"
             visible={videoReady}
-            fullBody={composited}
+            fullBody={pose}
           />
         )}
       </div>

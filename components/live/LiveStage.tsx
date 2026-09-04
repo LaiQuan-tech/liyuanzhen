@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import AvatarStage, { type AvatarStageHandle } from "@/components/avatar/AvatarStage";
+import { POSE_SEATED, type Pose } from "@/components/avatar/full-body-stage";
 import { speakableAnswer } from "@/lib/avatar";
 import {
   createRecorder,
@@ -81,7 +82,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  *    Nav/Footer 是每頁自己掛的，這一頁沒有掛，所以必須自己放。
  *    一張佔滿螢幕、會說話的臉，正是最可能被錄下來轉傳的東西。
  */
-export default function LiveStage() {
+/**
+ * @param pose 哪一個姿勢的底圖。`/live` 用坐姿（預設），`/live2` 用站姿。
+ *
+ * ⚠️ 這是這個元件唯一的 prop，刻意只有一個：錄音、切換式按鈕、字幕、
+ * TracePanel、閒置處理兩頁完全共用，不要為了「彈性」把它們也參數化。
+ *
+ * 🔴 兩頁都掛 `autoStart`，各自會開一個**計費中**的 LiveAvatar session。
+ * 兩個分頁同時開著就是兩份錢，demo 給人看的時候只開一頁。
+ */
+export default function LiveStage({ pose = POSE_SEATED }: { pose?: Pose } = {}) {
   const [recording, setRecording] = useState(false);
   /** 麥克風即時音量（0~1）。只用來畫回饋，不參與任何判斷。 */
   const [level, setLevel] = useState(0);
@@ -502,10 +512,8 @@ async function microphonePending(): Promise<boolean> {
       {/* ⚠️ autoStart 只在這一頁開。/chat 也掛 AvatarStage，那邊自動連費用直接翻倍，
           而且 /chat 的主體本來就是文字，沒有臉也完全能用。
 
-          🔴 fullBody 與 poster 是綁在一起的一組，不要只改其中一個。
-          合成模式下 poster 會被縮到頭部那一格、跟串流疊在同一個位置，
-          所以它必須是 avatar-poster-stage.jpg（原始真實照片、背景已對齊串流）。
-          換別張對位會整個跑掉。理由與對位方法見
+          🔴 fullBody 與 poster 是綁在一起的一組——現在由 Pose 物件保證，
+          不再是這裡手寫的兩個獨立值。對位方法與各種踩過的坑見
           components/avatar/full-body-stage.tsx 的檔頭。 */}
       <AvatarStage
         ref={stageRef}
@@ -516,8 +524,8 @@ async function microphonePending(): Promise<boolean> {
         onTeardown={handleTeardown}
         onSpeechFailed={handleSpeechFailed}
         autoStart
-        fullBody
-        poster="/avatar-poster-stage.jpg"
+        fullBody={pose}
+        poster={pose.poster}
       />
 
       {/* 加了 ?debug=1 才會出現。平常一個像素都不佔。 */}
