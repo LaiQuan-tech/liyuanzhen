@@ -30,7 +30,7 @@ describe("姿勢幾何", () => {
     expect(POSE_STANDING).toEqual({
       src: "/avatar-fullbody-standing.jpg",
       poster: "/avatar-poster-stage.jpg",
-      box: { left: "13.11%", top: "0.74%", width: "73.00%", height: "23.10%" },
+      box: { left: "7.37%", top: "0.55%", width: "84.31%", height: "26.67%" },
     });
   });
 
