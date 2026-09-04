@@ -3,7 +3,18 @@ import { synthesizeStream, hasTtsCredentials } from "@/lib/voice";
 import { clientIp, ttsRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+/**
+ * 🔴 2026-09-04 從 30 放寬到 60，因為 TTS 模型換成 `eleven_v3_conversational`。
+ *
+ * v2 的生成速度約 7 倍實時（12.26 秒音訊只花 1.73 秒），v3_conversational
+ * 只有約 2.25 倍（11.44 秒音訊花 5.08 秒）。回答上限 500 字換算成語音大約
+ * 100 秒，用 2.25 倍算就要 45 秒——留在 30 會讓長回答在串到一半時被切斷，
+ * 而畫面上看到的是她講到一半突然沒聲音，看不出原因。
+ *
+ * ⚠️ 這是**串流**端點，maxDuration 管的是整條連線活多久，不是首字延遲。
+ * 首字實測 3.6 秒，那個沒問題。
+ */
+export const maxDuration = 60;
 
 /**
  * 把答案文字合成成老師的聲音，回傳 LiveAvatar 吃得下的 base64 PCM 塊。

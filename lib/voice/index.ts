@@ -30,11 +30,35 @@ const API_BASE = "https://api.elevenlabs.io/v1/text-to-speech";
 const STREAM_SUFFIX = "/stream";
 
 /**
- * 多語模型。zh-TW 走這個。
- * ⚠️ 不要換成 flash 系列去省延遲——那會犧牲中文咬字，而這個站的內容是婦運史，
- * 人名與專有名詞密度極高，念錯的代價比慢半秒大得多。
+ * 🔴 2026-09-04 從 `eleven_multilingual_v2` 換成這一支，理由是**台灣口音**。
+ *
+ * 使用者回報「不像台灣人的口音」。克隆聲音的口音由兩件事決定：她本人的錄音，
+ * 加上模型的韻律先驗。`multilingual_v2` 是 29 語言的通用模型，中文韻律偏向
+ * 對岸，會把她的口音拉平——問題出在模型，不是克隆。
+ *
+ * 換之前拿她**同一個克隆聲**、同一句話（塞滿《婦女新知》《眾女成城》這類
+ * 這個站真的會念到的專有名詞）跑過四個模型，存成 wav 給使用者實際聽，
+ * 由他挑的。四個都吃 `pcm_24000` 串流，所以換模型只是改這一個常數。
+ *
+ * 實測首字延遲（同一句、同一個 voice id）：
+ *   eleven_multilingual_v2     1,610ms   ← 舊的
+ *   eleven_flash_v2_5          2,771ms
+ *   eleven_v3_conversational   3,599ms   ← 現在這個
+ *   eleven_v3                  4,155ms
+ *
+ * ⚠️ 代價是每一題多約兩秒的等待。這是知情的取捨：口音錯是每一句都錯，
+ * 慢兩秒是每一句都慢兩秒，使用者選了前者比較重要。
+ *
+ * ⚠️ **不要換成 flash 系列去省延遲**——那會犧牲中文咬字，而這個站的內容是
+ * 婦運史，人名與專有名詞密度極高，念錯的代價比慢兩秒大得多。
+ *
+ * ⚠️ 生成速度也跟著變慢：v2 約 7 倍實時（12.26 秒音訊只花 1.73 秒），
+ * v3_conversational 約 2.25 倍（11.44 秒音訊花 5.08 秒）。
+ * 回答上限 500 字換算成語音約 100 秒，用 2.25 倍算要 45 秒——**超過
+ * `app/api/tts/route.ts` 的 `maxDuration = 30`**。所以那支的 maxDuration
+ * 一起放寬到 60，見那裡的註解。
  */
-const MODEL_ID = "eleven_multilingual_v2";
+const MODEL_ID = "eleven_v3_conversational";
 
 export interface SynthesisResult {
   /** base64 的 PCM 塊，照順序送 */
