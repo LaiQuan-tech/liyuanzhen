@@ -47,6 +47,13 @@ export const GUARDED_REPLY =
  */
 export const nav = [
   { href: "/live", label: "面對面問她" },
+  /**
+   * ⚠️ 這一項跟上一項是**同一個功能的兩個版本**（坐姿／站姿），不是兩個功能。
+   * 所以標籤刻意寫成「（站姿）」而不是另取一個名字——訪客要看得出來
+   * 點哪個都會走到同一件事，只是人長得不一樣。
+   * 兩頁各自會開一個計費中的 session，同時開著就是兩份錢。
+   */
+  { href: "/live2", label: "面對面問她（站姿）" },
   { href: "/chat", label: "文字對話" },
   { href: "/events", label: "活動報名" },
   { href: "/about-ai", label: "關於這個 AI" },

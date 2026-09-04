@@ -8,7 +8,7 @@ import type { MetadataRoute } from "next";
  *
  * ⚠️ 新增路由時要回來加。這裡沒有自動掃描 app/ 的機制。
  */
-const ROUTES = ["", "/live", "/chat", "/events", "/about-ai", "/privacy"] as const;
+const ROUTES = ["", "/live", "/live2", "/chat", "/events", "/about-ai", "/privacy"] as const;
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const base = process.env.NEXT_PUBLIC_SITE_URL ?? "https://liyuanzhen.vercel.app";
@@ -16,6 +16,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     url: `${base}${path}`,
     lastModified: new Date(),
     changeFrequency: path === "" ? "weekly" : "monthly",
-    priority: path === "" ? 1 : path === "/live" ? 0.9 : 0.6,
+    priority: path === "" ? 1 : path.startsWith("/live") ? 0.9 : 0.6,
   }));
 }
