@@ -1,4 +1,7 @@
 import { chunkPcm, looksLikeWav, pcmDurationSeconds } from "./pcm";
+import { fixPronunciation } from "./pronunciation";
+
+export { fixPronunciation, PRONUNCIATION_FIXES } from "./pronunciation";
 
 export {
   chunkPcm,
@@ -87,7 +90,7 @@ export async function synthesizeStream(text: string): Promise<ReadableStream<Uin
     {
       method: "POST",
       headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ text, model_id: MODEL_ID }),
+      body: JSON.stringify({ text: fixPronunciation(text), model_id: MODEL_ID }),
     }
   );
 
@@ -110,7 +113,7 @@ export async function synthesize(text: string): Promise<SynthesisResult> {
     {
       method: "POST",
       headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ text, model_id: MODEL_ID }),
+      body: JSON.stringify({ text: fixPronunciation(text), model_id: MODEL_ID }),
     }
   );
 
