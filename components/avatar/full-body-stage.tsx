@@ -13,7 +13,7 @@ export type { Pose } from "./poses";
 export {
   POSE_SEATED,
   POSE_STANDING,
-  POSE_STANDING_STREET,
+  POSE_STANDING_STAGE,
   ALL_POSES,
   STAGE_MASK,
 } from "./poses";

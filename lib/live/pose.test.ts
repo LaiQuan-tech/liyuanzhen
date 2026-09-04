@@ -5,7 +5,7 @@ import {
   ALL_POSES,
   POSE_SEATED,
   POSE_STANDING,
-  POSE_STANDING_STREET,
+  POSE_STANDING_STAGE,
   STAGE_MASK,
 } from "@/components/avatar/poses";
 
@@ -38,25 +38,25 @@ describe("姿勢幾何", () => {
     });
   });
 
-  it("街景站姿（/live3）的數字", () => {
-    expect(POSE_STANDING_STREET).toEqual({
+  it("滿版背景板站姿（/live3）的數字", () => {
+    expect(POSE_STANDING_STAGE).toEqual({
       src: "/avatar-fullbody-standing-cutout.webp",
       poster: "/avatar-poster-stage.jpg",
       box: { left: "7.37%", top: "0.55%", width: "84.31%", height: "26.67%" },
-      background: "/live-bg-street.webp",
+      background: "/live-bg-stage.webp",
     });
   });
 
   /**
-   * 🔴 街景版的去背檔是從站姿那張 JPEG 逐像素做出來的，所以幾何必須完全相同。
+   * 🔴 滿版版的去背檔是從站姿那張 JPEG 逐像素做出來的，所以幾何必須完全相同。
    * poses.ts 寫的是引用（`box: POSE_STANDING.box`），但引用會被後人「順手展開
    * 成字面量」，展開之後就可能只改一邊。這條在守那個。
    * 壞掉的樣子很難查：兩頁共用同一組數字，所以看起來會像幾何算錯，
    * 其實是有人動了其中一份。
    */
-  it("🔴 街景版與站姿版必須是同一組幾何", () => {
-    expect(POSE_STANDING_STREET.box).toEqual(POSE_STANDING.box);
-    expect(POSE_STANDING_STREET.poster).toBe(POSE_STANDING.poster);
+  it("🔴 滿版版與站姿版必須是同一組幾何", () => {
+    expect(POSE_STANDING_STAGE.box).toEqual(POSE_STANDING.box);
+    expect(POSE_STANDING_STAGE.poster).toBe(POSE_STANDING.poster);
   });
 
   /**
@@ -88,7 +88,7 @@ describe("姿勢幾何", () => {
 
   /**
    * 🔴 有背景圖就代表底圖是去背檔，兩者是一組。
-   * 只換一邊的後果：給了背景卻用不透明 JPEG → 街景中間一張灰色長方形；
+   * 只換一邊的後果：給了背景卻用不透明 JPEG → 背景板中間一張灰色長方形；
    * 給了去背檔卻沒有背景 → 她浮在 #1A1A1A 上。
    * WebP／PNG 是目前 repo 裡唯二帶 alpha 的格式。
    */

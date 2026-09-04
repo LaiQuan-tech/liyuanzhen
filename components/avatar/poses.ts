@@ -240,8 +240,16 @@ export const STAGE_MASK =
  */
 
 /**
- * 站姿＋街景：跟 `POSE_STANDING` 是**同一個人、同一張來源、逐像素相同的位置**，
- * 只差在背景。`/live3` 用這個。
+ * 站姿＋滿版背景板：跟 `POSE_STANDING` 是**同一個人、同一張來源、逐像素相同的
+ * 位置**，只差在背景。`/live3` 用這個。
+ *
+ * 🔴 **這裡曾經是一張真實街景，換掉是因為那條路走不通。** 使用者連續四次回報
+ * 「怪怪的」，最後量出根因：底圖胸口以下是 AI 生成的**平光**（她的下半身由上到下
+ * 47→51，極差只有 4；橫掃外套極差 19，完全沒有方向性明暗），而真實街景是**有
+ * 方向的自然光**（同樣量法極差 37）。這個不match在人物的**內部**，不在邊緣，
+ * 所以去背、景深、light wrap、調色全部修不到——後兩者實測還讓畫面更糟
+ * （light wrap 變成外發光、調亮下半身讓黑外套變灰）。
+ * ⚠️ 不要再試著把她放進任何「宣稱是真實地點」的背景，除非底圖重生成。
  *
  * 🔴 `poster` 與 `box` 直接引用 `POSE_STANDING` 的，不是複製字面量——
  * 兩者必須永遠相同，寫成引用之後就不可能漂移。`pose.test.ts` 另有一條
@@ -312,13 +320,13 @@ export const STAGE_MASK =
  * 把「臉切換時有色差」那個 bug 帶回來。要讓對比不那麼強，改動背景板的亮度，
  * 不要動她。
  *
- * 背景板 `live-bg-street.webp` 的作法見 `app/live3/page.tsx`。
+ * 背景板 `live-bg-stage.webp` 的作法見 `app/live3/page.tsx`。
  */
-export const POSE_STANDING_STREET: Pose = {
+export const POSE_STANDING_STAGE: Pose = {
   src: "/avatar-fullbody-standing-cutout.webp",
   poster: POSE_STANDING.poster,
   box: POSE_STANDING.box,
-  background: "/live-bg-street.webp",
+  background: "/live-bg-stage.webp",
 };
 
 /**
@@ -329,4 +337,4 @@ export const POSE_STANDING_STREET: Pose = {
  * 忘記擴充，新姿勢就完全沒被驗到。改成吃這個陣列之後，第四個姿勢不可能被漏掉。
  * 加新姿勢請一併加進這裡。
  */
-export const ALL_POSES = [POSE_SEATED, POSE_STANDING, POSE_STANDING_STREET] as const;
+export const ALL_POSES = [POSE_SEATED, POSE_STANDING, POSE_STANDING_STAGE] as const;
