@@ -200,6 +200,38 @@ function parseChapters(text: string): Chapter[] {
     }
     if (!chapter || !section) continue; // 封面與目錄
 
+    // 🔴 沒有 ◎ 標記、但實際上仍是他人在說話的段落。
+    // 成因：偵測到 `◎ 姓名` 會開一個帶 speaker 的節，而**下一個普通標題就把
+    // speaker 歸 null**。這對絕大多數專文是對的（她的敘述確實在那裡接回來，
+    // 我逐句讀過 15 個可疑段落，13 個都是她自己），但葉菊蘭那篇分成好幾個子節，
+    // 子節就掉出標記之外了。
+    //
+    // 症狀很具體：`10-autobiography-05.md` 的「成長的啟蒙與職場的尊嚴」整節是
+    // 葉菊蘭講她自己的客家農家童年、她先生鄭南榕，而標題上什麼也沒有——
+    // 訪客問「你先生是誰」「你的童年」，模型拿到的就是一塊標題無害、
+    // 內文純第一人稱的別人自述。李元貞生於昆明，先生是柯慶明。
+    //
+    // ⚠️ 不用啟發式自動判斷（試過，13/15 誤判）。列表比猜測誠實，
+    // 而且哪一節屬於誰是可以逐條核對的。加新的專文時要回來看這裡。
+    const GUEST_CONTINUATION: Record<string, string> = {
+      成長的啟蒙與職場的尊嚴: "葉菊蘭",
+      國會與憲政戰場上的老姐妹: "葉菊蘭",
+      先行者的歷史拓印: "葉菊蘭",
+    };
+
+    // 🔴 節的**中途**換人說話，連標題都沒有，只有裸的一行「我的大姊元貞李元晶」。
+    // 這是第 13 個他人聲音（妹妹），原本連 ◎ 標記都沒有。
+    const GUEST_INLINE_SWITCH: Record<string, { speaker: string; heading: string }> = {
+      我的大姊元貞李元晶: { speaker: "李元晶", heading: "我的大姊元貞" },
+    };
+
+    const inline = GUEST_INLINE_SWITCH[line.trim()];
+    if (inline) {
+      section = { heading: inline.heading, speaker: inline.speaker, lines: [] };
+      chapter.sections.push(section);
+      continue;
+    }
+
     const speaker = parseSpeaker(line);
     if (speaker) {
       const open: Section = section;
@@ -221,7 +253,9 @@ function parseChapters(text: string): Chapter[] {
     }
 
     if (isHeading(lines, i)) {
-      section = { heading: s, speaker: null, lines: [] };
+      // ⚠️ 先查 override：這個標題是不是某位客人專文的後續小節
+      const carried = GUEST_CONTINUATION[s.trim()] ?? null;
+      section = { heading: s, speaker: carried, lines: [] };
       chapter.sections.push(section);
       continue;
     }
