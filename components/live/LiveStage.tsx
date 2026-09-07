@@ -14,6 +14,7 @@ import {
   type RecordingResult,
 } from "@/lib/live/recorder";
 import { METER_BARS, meterBarHeight, smoothLevel } from "@/lib/live/level";
+import { looksLikeSpeech } from "@/lib/live/transcript";
 import TracePanel from "@/components/live/TracePanel";
 import { trace, traceReset } from "@/lib/trace";
 import {
@@ -251,8 +252,17 @@ export default function LiveStage({ pose = POSE_SEATED }: { pose?: Pose } = {}) 
       // 就回 null 了，根本到不了這裡），只是辨識不出內容。
       // 原本寫「安靜地什麼都不做」，實際症狀就是使用者回報的「說話沒有反應」——
       // 按了、講了、放開，畫面一個字都沒變，他無法分辨是自己的問題還是網站壞了。
-      if (!transcript) {
-        trace("逐字稿是空的", "有聲音但辨識不出內容", "warn");
+      // ⚠️ 這裡把兩種情況合在一起處理，因為對使用者來說是同一件事。
+      // 一是空字串（辨識不出內容），二是**有字但那些字不構成話**——
+      // 正式站真的收過 8 筆「00:00」和 1 筆「3」，那是辨識把靜音轉成了時間碼。
+      // 每一筆都白花一次 Gemini 呼叫、佔一次限流額度、在問答紀錄留一筆垃圾，
+      // 而訪客看到的是一段莫名其妙的婉拒，會以為是自己問錯了。
+      if (!transcript || !looksLikeSpeech(transcript)) {
+        trace(
+          "逐字稿沒有內容",
+          transcript ? `辨識成「${transcript}」，不是一句話` : "有聲音但辨識不出內容",
+          "warn"
+        );
         setNotice(liveCopy.heardNothing);
         return;
       }
