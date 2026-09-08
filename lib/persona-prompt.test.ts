@@ -82,9 +82,16 @@ describe("人格提示詞", () => {
     expect(buildSystemPrompt([chunk()])).not.toContain("提問牆");
   });
 
-  it("最多三句與引導看書的指示要在", () => {
+  /**
+   * ⚠️ 這裡驗的是**字數**上限，不是句數。實測「最多三句」模型不聽（12 題有 8 題寫成 4 句），
+   * 「不超過 100 字」則全數遵守——原因寫在 persona-prompt.ts 的 HARD_RULES 註解。
+   * 🔴 有人要改回句數的話，請先跑 `npm run eval:voice` 拿數字，不要憑感覺改。
+   */
+  it("字數上限與引導看書的指示要在", () => {
     const p = buildSystemPrompt([chunk()]);
-    expect(p).toContain("最多三句話");
+    expect(p).toContain("整段不超過 100 字");
+    // 句數限制已經拿掉了——留這條確保不會有人偷偷加回來又跟字數打架
+    expect(p).not.toContain("最多三句話");
     expect(p).toContain("《我來了！臺灣婦女改變了》");
     expect(p).toContain("《眾女成城：台灣婦運回憶錄》");
   });
