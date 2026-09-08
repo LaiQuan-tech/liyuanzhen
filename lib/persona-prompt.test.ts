@@ -70,7 +70,23 @@ describe("人格提示詞", () => {
     const p = buildSystemPrompt([chunk()]);
     expect(p).toContain("不要用「我手上的資料沒有記載」當開場白");
     // ⚠️ 但「不知道就說不知道」這件事本身不可以被刪掉——那是誠實機制
-    expect(p).toContain("提問牆");
+    expect(p).toContain("這部分我沒有記載");
+  });
+
+  /**
+   * 🔴 這個站沒有「提問牆」這一頁（路由只有 / about-ai chat events live live2 live3 privacy）。
+   * 舊版規則 1 叫訪客去那裡留言，等於一直把人指向一個不存在的地方。
+   * 這條擋的是有人照著舊文案又加回來。真的做出那一頁再改這條測試。
+   */
+  it("🔴 不可以叫訪客去不存在的提問牆", () => {
+    expect(buildSystemPrompt([chunk()])).not.toContain("提問牆");
+  });
+
+  it("最多三句與引導看書的指示要在", () => {
+    const p = buildSystemPrompt([chunk()]);
+    expect(p).toContain("最多三句話");
+    expect(p).toContain("《我來了！臺灣婦女改變了》");
+    expect(p).toContain("《眾女成城：台灣婦運回憶錄》");
   });
 });
 
