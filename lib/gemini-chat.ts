@@ -52,20 +52,23 @@ export async function streamChatResponse(
     config: {
       systemInstruction,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
-      // 🔴 這裡本來完全沒設，等於用 Gemini 預設的 temperature 1.0，每次重抽。
-      // 症狀是使用者聽得出來的：「為什麼每次回答，聲音會稍許不同？」
-      // 變的其實不是嗓子，是文字——字不一樣就長度不一樣、標點位置不一樣，
-      // 朗讀的節奏與停頓跟著全變。
+      // 🔴 這裡刻意不設 temperature。設了沒有用——這是量出來的，不要再試一次。
       //
-      // 2026-09-08 用 eval:voice 同一組 12 題連跑兩輪量到的文字重疊度：
-      //   平均 67%（三分之一的字不同）
-      //   「你支持哪一個政黨？」36.6%（58 字 vs 13 字）
-      //   「你是真人嗎？」      46.7%（50 字 vs 70 字）
+      // 起因是使用者問「為什麼每次回答，聲音會稍許不同？」。變的不是嗓子是文字：
+      // 同一組 12 題連跑兩輪，文字重疊度平均只有 67%（「你支持哪一個政黨？」36.6%，
+      // 58 字 vs 13 字）。字不一樣就長度不一樣、標點位置不一樣，朗讀的節奏跟著全變。
       //
-      // ⚠️ 沒有動 ElevenLabs 那一層（`lib/voice/index.ts` 送出的 body 至今沒有
-      // seed 也沒有 voice_settings）。那一層要壓變異就得拉高 stability，
-      // 代價是語氣變平，會抵銷語音調校。這裡先修沒有副作用的那一半。
-      temperature: 0.3,
+      // 我以為原因是沒設 temperature（走預設 1.0），加了 0.3 部署上線再量兩輪：
+      //   文字重疊度 67.0% → 64.4%   沒有改善，還在雜訊裡
+      //
+      // 直接打 SDK 驗才知道為什麼：**temperature=0 連續三次仍然三種答案**
+      // （同一組 systemInstruction + contents，gemini-flash-latest）。
+      // 也就是說這個模型的服務端本身就不決定性——批次組成與浮點加總次序會變，
+      // logits 就跟著變，不是把採樣關掉能解決的。
+      //
+      // ⚠️ 所以要讓同一個問題聽起來一樣，唯一的路是**快取答案**（連音檔一起快取
+      // 更徹底），不是調採樣參數。ElevenLabs 那一層（lib/voice/index.ts 至今沒送
+      // seed 也沒送 voice_settings）只有在文字已經固定的前提下才值得處理。
       // ⚠️ 不要加 thinkingConfig: { thinkingBudget: 0 }。
       // gemini-flash-latest 會回 400 INVALID_ARGUMENT（已實測隔離確認）。
       // 那個技巧適用於 gemini-3.5-flash 之類的特定版本，不適用於這個別名。
