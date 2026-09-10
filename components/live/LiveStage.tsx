@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import AvatarStage, { type AvatarStageHandle } from "@/components/avatar/AvatarStage";
+import ChibiStage from "@/components/avatar/ChibiStage";
 import { POSE_SEATED, type Pose } from "@/components/avatar/full-body-stage";
 import { speakableAnswer } from "@/lib/avatar";
 import {
@@ -85,14 +86,35 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  */
 /**
  * @param pose 哪一個姿勢的底圖。`/live` 用坐姿（預設），`/live2` 用站姿。
+ *   ⚠️ 只有 `variant="video"` 用得到——Q 版的姿勢是畫在立繪上的，沒有對位參數。
  *
- * ⚠️ 這是這個元件唯一的 prop，刻意只有一個：錄音、切換式按鈕、字幕、
- * TracePanel、閒置處理兩頁完全共用，不要為了「彈性」把它們也參數化。
+ * @param variant 誰把答案唸出來、畫面上動的是什麼。預設 `"video"`（現況）。
  *
- * 🔴 兩頁都掛 `autoStart`，各自會開一個**計費中**的 LiveAvatar session。
- * 兩個分頁同時開著就是兩份錢，demo 給人看的時候只開一頁。
+ *   - `"video"`：`AvatarStage` ＋ HeyGen 串流虛擬人。`/live`、`/live2`、`/live3`。
+ *   - `"chibi"`：`ChibiStage` ＋ Q 版分層立繪自己對嘴。`/live4`。
+ *
+ *   ⚠️ 錄音、STT、chat、字幕、免責、揭露、限流、錯誤文案、TracePanel
+ *   **兩種都完全共用**，這正是加一個 prop 而不是複製這 700 行的理由。
+ *   兩邊只差在 `stageRef` 後面接的是誰。
+ *
+ *   ⚠️ `provider`、`autoStart`、`fullBody`、`poster` 是 HeyGen 專屬的，
+ *   chibi 分支不需要（沒有 session 可以自動開，也沒有臉要對位）。
+ *
+ *   ⚠️ `ChibiStage` 是**靜態 import**，所以 `/live`、`/live2`、`/live3` 也會載到它
+ *   （實測 First Load JS 109 kB → 113 kB，行為完全不變）。這是知情的取捨：
+ *   `next/dynamic` 不會把 ref 穿過去（`VideoAvatar` 的 `videoRef` 走一般 prop 就是
+ *   為了這件事），而改成 lazy 之後 `stageRef.current` 會有一段是 null——剛好落在
+ *   「按下按鈕的那一瞬間要同步 prime() AudioContext」那條路上，失敗方式是
+ *   **沒有錯誤、只是那一段話沒有聲音**。4 kB 換一個不會靜默失敗的 ref。
+ *
+ * 🔴 `video` 的三頁都掛 `autoStart`，各自會開一個**計費中**的 LiveAvatar session。
+ * 三個分頁同時開著就是三份錢，demo 給人看的時候只開一頁。
+ * 🔴 `chibi` 沒有這個問題——那是換掉 HeyGen 換到的東西之一。
  */
-export default function LiveStage({ pose = POSE_SEATED }: { pose?: Pose } = {}) {
+export default function LiveStage({
+  pose = POSE_SEATED,
+  variant = "video",
+}: { pose?: Pose; variant?: "video" | "chibi" } = {}) {
   const [recording, setRecording] = useState(false);
   /** 麥克風即時音量（0~1）。只用來畫回饋，不參與任何判斷。 */
   const [level, setLevel] = useState(0);
@@ -524,19 +546,33 @@ async function microphonePending(): Promise<boolean> {
 
           🔴 fullBody 與 poster 是綁在一起的一組——現在由 Pose 物件保證，
           不再是這裡手寫的兩個獨立值。對位方法與各種踩過的坑見
-          components/avatar/full-body-stage.tsx 的檔頭。 */}
-      <AvatarStage
-        ref={stageRef}
-        state={avatarStateFor(state)}
-        size="full"
-        provider={LIVE_PROVIDER}
-        onSpeakingChange={setSpeaking}
-        onTeardown={handleTeardown}
-        onSpeechFailed={handleSpeechFailed}
-        autoStart
-        fullBody={pose}
-        poster={pose.poster}
-      />
+          components/avatar/full-body-stage.tsx 的檔頭。
+
+          🔴 Q 版分支少掉的那幾個 prop 不是漏寫的：
+          `provider`（沒有 driver 要選）、`autoStart`（沒有 session 要開）、
+          `fullBody`／`poster`（沒有臉要對位、也沒有串流接上前的空窗要填）。
+          `onTeardown` 同理——那是「計費中的串流被收掉了」的通知。
+          浮水印那道法定揭露由 ChibiStage 自己提供，見該元件的檔頭。 */}
+      {variant === "chibi" ? (
+        <ChibiStage
+          ref={stageRef}
+          onSpeakingChange={setSpeaking}
+          onSpeechFailed={handleSpeechFailed}
+        />
+      ) : (
+        <AvatarStage
+          ref={stageRef}
+          state={avatarStateFor(state)}
+          size="full"
+          provider={LIVE_PROVIDER}
+          onSpeakingChange={setSpeaking}
+          onTeardown={handleTeardown}
+          onSpeechFailed={handleSpeechFailed}
+          autoStart
+          fullBody={pose}
+          poster={pose.poster}
+        />
+      )}
 
       {/* 加了 ?debug=1 才會出現。平常一個像素都不佔。 */}
       <TracePanel />
