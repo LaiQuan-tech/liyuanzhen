@@ -1,8 +1,21 @@
 import type { Metadata } from "next";
 import LiveStage from "@/components/live/LiveStage";
 
+/**
+ * 🔴 `robots` 是這一頁**自己**的，不是靠全站那三處繼承來的。
+ *
+ * 全站現在確實整站 noindex（`app/layout.tsx` 的 metadata.robots ＋ 手寫 meta，
+ * 加上 `app/robots.ts` 的 disallow），所以這一行今天不改變任何行為。
+ * 它擋的是未來：那三處的註解寫著「要開放收錄就三處一起改」，而那個動作
+ * 會讓這一頁跟著變成可索引——畫面上是李元貞老師的 Q 版肖像**草案**，
+ * 使用範圍仍待老師本人與婦權會確認。
+ *
+ * 也就是說這是一道獨立的栓：全站開放的那一天，這一頁要被單獨拿出來討論，
+ * 而不是順著一起被打開。`/chibi` 用的是同一個判準。
+ */
 export const metadata: Metadata = {
   title: "虛擬互動（Q 版）｜李元貞 × AI 數位人",
+  robots: { index: false, follow: false },
 };
 
 /**
@@ -38,8 +51,7 @@ export const metadata: Metadata = {
  * （HeyGen 那條路是 AvatarStage／VideoAvatar 提供的，換掉 avatar 元件不等於
  * 那道揭露可以跟著消失）。那不是可選的裝飾。
  *
- * ⚠️ 這一頁**不需要**自己寫 `robots`：全站已經是 noindex（`app/layout.tsx` 的
- * metadata.robots ＋ 手寫 meta，加上 `app/robots.ts` 的 disallow）。
+ * ⚠️ 這一頁有**自己的** `robots: noindex`，理由見 metadata 上方的註解。
  * ⚠️ 也刻意**不**加進 `app/sitemap.ts`。畫面上是李元貞老師的 Q 版肖像草案，
  * 使用範圍仍待老師本人與婦權會確認（見 `components/avatar/ChibiAvatar.tsx`
  * 的檔頭），不希望被索引的頁面不該出現在 sitemap 裡——`/chibi` 是同樣的判準。

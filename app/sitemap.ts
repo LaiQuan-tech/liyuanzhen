@@ -7,6 +7,12 @@ import type { MetadataRoute } from "next";
  * 不用再回頭補這個檔——少一件會被忘記的事。
  *
  * ⚠️ 新增路由時要回來加。這裡沒有自動掃描 app/ 的機制。
+ *
+ * 🔴 但有兩個**刻意的例外**，不要順手補齊：`/live4` 與 `/chibi`。
+ * 兩頁畫面上都是李元貞老師的 Q 版肖像**草案**，使用範圍仍待老師本人與
+ * 婦權會確認，兩頁也都有自己的 `robots: noindex`。sitemap 是「請來索引我」
+ * 的訊號，跟 noindex 放在一起只會互相矛盾。
+ * 授權範圍確認之後再把 `/live4` 加進來（`/chibi` 是內部測試頁，永遠不用加）。
  */
 const ROUTES = ["", "/live", "/live2", "/live3", "/chat", "/events", "/about-ai", "/privacy"] as const;
 
