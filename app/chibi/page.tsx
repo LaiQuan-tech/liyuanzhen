@@ -6,9 +6,10 @@ import ChibiLab from "./ChibiLab";
  * 🔴 這一頁必須 noindex，而且理由跟全站那三處不同。
  *
  * 全站的 noindex（`app/robots.ts`、`app/layout.tsx` 的 metadata.robots 與手寫 meta）
- * 擋的是「肖像授權不等於搜尋引擎授權」。這一頁多一層：畫面上那個角色是
- * **佔位圖**，它一旦被收錄，搜尋結果會把一個未經授權、也不是最終設計的
- * Q 版人形跟老師的名字綁在一起——而搜尋結果頁不會顯示「這是示意圖」。
+ * 擋的是「肖像授權不等於搜尋引擎授權」。這一頁多一層，而且**比之前更重要**：
+ * 畫面上不再是佔位幾何人形，是李元貞老師本人的 Q 版肖像草案。
+ * 它一旦被收錄，搜尋結果會把一個**使用範圍還沒確認**的肖像跟她的名字綁在一起——
+ * 而搜尋結果頁不會顯示「這是草案」。
  *
  * ⚠️ 所以就算哪天全站開放收錄，這一頁的 robots 也要單獨留著。
  * 它是頁面層級的設定，不會被上層覆蓋。
@@ -17,7 +18,7 @@ import ChibiLab from "./ChibiLab";
  * 要回來加」，這一頁是明確的例外：不希望被索引的頁面不該出現在 sitemap 裡。
  */
 export const metadata: Metadata = {
-  title: "對嘴技術驗證（非人物設計）｜內部測試頁",
+  title: "Q 版對嘴技術驗證｜內部測試頁",
   robots: { index: false, follow: false },
 };
 
@@ -49,20 +50,21 @@ export default function ChibiPage() {
     <main className="lz-wrap-wide py-10 md:py-14">
       <span className="lz-eyebrow">內部技術驗證</span>
 
-      <h1 className="lz-h2 mt-4">對嘴技術驗證，非人物設計</h1>
+      <h1 className="lz-h2 mt-4">Q 版對嘴技術驗證</h1>
 
       <p className="lz-lead mt-4">
         這一頁在測「PCM 串流能不能一邊播、一邊算出嘴型時間軸」，以及第一個音訊要多久才
-        排得進喇叭。畫面上的角色是<strong>程式畫的佔位幾何人形</strong>，
-        不是最終的 Q 版設計，也刻意不描繪任何真人。
+        排得進喇叭。畫面上是<strong>李元貞老師的 Q 版草案</strong>，
+        嘴型是從原圖萃取的微笑曲線另外畫的四張圖層。
       </p>
 
       <div className="lz-card-wash mt-6 p-4 text-sm leading-relaxed md:p-5">
         <p>
           <strong>關於畫面上這個角色：</strong>
-          它是對嘴的技術鷹架，不是人物設計。Q 版是對真人形象的再創作，需要李元貞老師本人
-          與婦權會的授權，而這一版還沒有——所以這裡畫的是一個中性的、明顯是示意圖的
-          幾何人形。正式版會把它換成分層立繪（每個嘴型一張圖），元件的 props 介面不變。
+          這是李元貞老師的 Q 版<strong>草案</strong>，不是定稿。Q 版是對在世者形象的
+          再創作——幾歲、什麼表情、什麼身形都是編輯決定，不是還原——所以肖像的使用範圍
+          仍需要老師本人與婦權會確認。在那之前這一頁不對外、不被索引、也不掛到訪客走得到的頁面。
+          原圖衣服上有生成出來的英文字樣，已經抹除。
         </p>
         <p className="mt-3">
           <strong>關於花費：</strong>

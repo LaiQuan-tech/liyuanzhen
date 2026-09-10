@@ -1,66 +1,79 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-import type { Viseme } from "@/lib/avatar/lipsync";
-
-/**
- * 對嘴的**技術鷹架**，不是人物設計。
- *
- * 🔴 這裡畫的是一個中性的幾何人形——圓頭、兩顆點眼睛、一張會變形的嘴。
- * 它**刻意不像任何真人**，尤其不可以像李元貞老師：她是在世者，Q 版是對真人
- * 形象的**再創作**，需要她本人與婦權會的授權，而這一版還沒有。所以這支檔案
- * 存在的唯一理由是「證明嘴會跟著聲音動」，不是「這個角色長怎樣」。
- *
- * ⚠️ 改這個檔的時候不要「順手畫得像一點」。加眼鏡、加髮型、加任何她的特徵，
- * 都會讓一個未授權的肖像跟著部署上正式站。要換人物就是等美術素材發包回來。
- *
- * ## 正式版會怎麼換
- *
- * 上線時這裡的 inline SVG 會整個換成**分層立繪**：一張底圖（身體、頭髮、眼睛）
- * 疊上四張嘴型圖，依 `viseme` 切換哪一張顯示。
- *
- * 🔴 **props 介面保持不變**（`viseme` / `level` / `speaking` / `className`）。
- * 換素材是換這支檔案的內部，不該動到 `app/chibi/page.tsx` 或
- * `lib/avatar/lipsync-player.ts` 任何一行——那條界線是這一版最值得留下來的東西。
- *
- * ⚠️ 這支**完全不碰音訊**。它不知道 `AudioContext` 存在，只吃 props。
- * 對嘴會不會準完全由 `LipSyncPlayer.currentViseme()` 決定，跟這裡無關；
- * 要 debug 對不對齊請去看那支，不要在這裡加時間邏輯。
- */
-
-/** 嘴的幾何。畫成一顆單位橢圓再縮放，closed 就是壓扁成一條線。 */
-interface MouthShape {
-  /** 水平縮放（user unit） */
-  sx: number;
-  /** 垂直縮放（user unit） */
-  sy: number;
-}
+import { VISEME_ORDER, type Viseme } from "@/lib/avatar/lipsync";
 
 /**
- * 四個嘴型各一組縮放值。
+ * Q版數位人的分層立繪。
  *
- * ⚠️ 型別是 `Record<Viseme, …>`——`lipsync.ts` 哪天多一個嘴型，這裡會編譯失敗，
- * 而不是安靜地少畫一張。那支檔頭寫了「不要加到八個」的理由，但萬一加了，
- * 要在 build 就知道。
+ * ## 🔴 這是李元貞老師本人的 Q 版肖像，不再是佔位圖
+ *
+ * 前一版這裡畫的是一個中性幾何人形，理由是「Q 版是對在世者形象的再創作，
+ * 需要授權，而那時候還沒有」。現在使用者提供了立繪，畫面上就是她。
+ *
+ * ⚠️ 所以這個檔案的風險等級變了。它跟 `lib/persona-prompt.ts` 一樣，
+ * 是「改一行就可能讓一個未經確認的肖像出現在婦權會官網上」的那一類。
+ * 在肖像使用範圍由老師本人與婦權會確認之前：
+ *   1. `/chibi` 的 `robots: noindex` 不可以拿掉，也不可以進 sitemap
+ *   2. 不要把這個元件掛到 `/`、`/live`、`/live2`、`/live3` 或任何訪客會走到的頁
+ *   3. 頁面上「草案、待確認」的說明不可以刪
+ *
+ * ## 素材怎麼來的
+ *
+ * 使用者給的是一張 1365×768 的生成圖，做了三件事（過程與量測見 git log）：
+ *
+ * 1. **抹掉衣服上的字。** 原圖綠色 T 恤上有生成出來的「Gender: F」（被外套切成
+ *    「Sender: [F」）。🔴 那必須拿掉——婦權會的站上，她胸口寫著 Gender: F 會被
+ *    讀成一句宣言，而它只是模型把 prompt 畫到衣服上的痕跡。
+ * 2. **去背。** ⚠️ 球鞋是白的，跟背景只差 1–2 階（腿間 254,249,245／鞋白
+ *    254,250,247），所以不能用白色門檻。作法是從邊界 flood fill、並且跟**固定的
+ *    背景參考色**比對——跟鄰居比會讓抗鋸齒的漸層變成一條走進人物內部的通道，
+ *    第一次就是這樣把膚色吃掉了（人物只剩 21,916 px，正確值是 164,974）。
+ *    兩腿之間與腳下影子是封閉區域，flood fill 到不了，另外用連通塊標記移除。
+ * 3. **挖掉嘴、另外畫四個嘴型。**
+ *
+ * ## 嘴型是從原圖萃取的，不是猜的
+ *
+ * 第一版憑感覺畫拋物線，A/B 之後發現位置偏高、末端平切、弧度太淺。
+ * 改成直接從原圖量：微笑曲線是 `y = -0.00745x² + 2.8156x + 26.28`（殘差 0.89px），
+ * 線寬中央 5.0px **向兩端漸收到 1px**，最低點在 x=185 而不是正中——她的頭是微側的。
+ * 四個嘴型共用這條曲線當上緣，下緣是 `depth × (1-t²)`，所以嘴角永遠閉合。
+ * 重畫後 closed 與原圖的平均像素差 6.37。
+ *
+ * ⚠️ 下唇那個粉色小記號只出現在 closed。它在原圖裡是下唇的高光，嘴一張開就不該在，
+ * 而且 mid 的下緣正好切過它，留著會變成一坨黏在嘴上的粉色髒點。
+ *
+ * ## 換成正式美術素材時要動什麼
+ *
+ * 只要換 `public/chibi/` 底下五張圖，並更新 `MOUTH_BOX` 這四個百分比。
+ * props 介面不變，`LipSyncPlayer` 那一側完全不用動。
  */
-const MOUTH: Record<Viseme, MouthShape> = {
-  closed: { sx: 13, sy: 1.6 },
-  small: { sx: 9, sy: 5 },
-  mid: { sx: 11, sy: 9.5 },
-  wide: { sx: 12.5, sy: 14 },
+
+/** 立繪的原始尺寸。用來鎖住外框比例，換圖時要一起更新 */
+const FIGURE_ASPECT = "382 / 672";
+
+/**
+ * 嘴型圖層在立繪上的位置（相對百分比，換圖要重量）。
+ * 四張嘴型圖共用同一個 bbox，所以定位只有一組。
+ */
+const MOUTH_BOX = {
+  left: "41.099%",
+  top: "41.071%",
+  width: "19.895%",
+  height: "7.589%",
+} as const;
+
+const MOUTH_SRC: Record<Viseme, string> = {
+  closed: "/chibi/mouth-closed.webp",
+  small: "/chibi/mouth-small.webp",
+  mid: "/chibi/mouth-mid.webp",
+  wide: "/chibi/mouth-wide.webp",
 };
-
-/** 眨眼一次多久（毫秒）。人的一次眨眼約 100–150ms */
-const BLINK_MS = 120;
-const BLINK_GAP_MIN_MS = 3_000;
-const BLINK_GAP_MAX_MS = 5_000;
 
 export interface ChibiAvatarProps {
   viseme: Viseme;
-  /** 0–1 的張嘴程度。在該嘴型的基準值上再微調，讓同一個嘴型也有輕重之分 */
+  /** 0–1 的張嘴程度。四張圖之間的微幅補間用，讓同一個嘴型也有呼吸感 */
   level: number;
-  /** 有沒有在講話。只影響待機呼吸與無障礙標籤，不影響嘴型 */
   speaking: boolean;
   className?: string;
 }
@@ -69,136 +82,94 @@ export default function ChibiAvatar({ viseme, level, speaking, className }: Chib
   const [blinking, setBlinking] = useState(false);
 
   /**
-   * 隨機眨眼。
-   *
-   * ⚠️ 隨機數只能在 effect 裡（＝只在瀏覽器），不能在 render 期間算——
-   * SSR 與 client 各擲一次骰子會造成 hydration mismatch。
+   * 眨眼。⚠️ 目前是整張圖極短暫的垂直壓縮，不是真的閉眼——
+   * 真正的閉眼需要另外兩張眼睛素材（她戴眼鏡，鏡片區的膚色跟臉頰不同，
+   * 挖眼睛比挖嘴麻煩）。這是刻意的取捨：沒有任何眨眼會讓她看起來像死掉的。
+   * 換到正式素材時應該改成眼睛圖層。
    */
   useEffect(() => {
-    let closeTimer: ReturnType<typeof setTimeout> | undefined;
-    let openTimer: ReturnType<typeof setTimeout> | undefined;
-
+    let timer: ReturnType<typeof setTimeout>;
     const schedule = () => {
-      const gap = BLINK_GAP_MIN_MS + Math.random() * (BLINK_GAP_MAX_MS - BLINK_GAP_MIN_MS);
-      closeTimer = setTimeout(() => {
-        setBlinking(true);
-        openTimer = setTimeout(() => {
-          setBlinking(false);
+      timer = setTimeout(
+        () => {
+          setBlinking(true);
+          setTimeout(() => setBlinking(false), 110);
           schedule();
-        }, BLINK_MS);
-      }, gap);
+        },
+        2800 + Math.random() * 2600
+      );
     };
-
     schedule();
-    return () => {
-      if (closeTimer) clearTimeout(closeTimer);
-      if (openTimer) clearTimeout(openTimer);
-    };
+    return () => clearTimeout(timer);
   }, []);
 
-  const shape = MOUTH[viseme];
-  // level 只在該嘴型的基準值附近微調（±10%），不跨階——跨階是 lipsync.ts 的職責
-  const openness = 0.9 + 0.2 * Math.min(1, Math.max(0, level));
-  const sy = shape.sy * (viseme === "closed" ? 1 : openness);
-  const eyeScaleY = blinking ? 0.1 : 1;
+  // 同一個嘴型內用 level 做極小幅度的縮放。⚠️ 幅度要小——
+  // 拉太多會把線條拉變形，而分層立繪的線寬是固定的，變形一眼就看得出來。
+  const mouthScale = 1 + Math.min(1, Math.max(0, level)) * 0.04;
 
   return (
-    <div className={className}>
-      <style>{CHIBI_CSS}</style>
-      <svg
-        viewBox="0 0 200 250"
-        role="img"
-        aria-label={
-          speaking
-            ? "示意用的佔位角色，正在做對嘴動作"
-            : "示意用的佔位角色，待機中"
-        }
-        className="chibi-svg"
+    <div
+      className={className}
+      style={{ position: "relative", aspectRatio: FIGURE_ASPECT, width: "100%" }}
+      role="img"
+      aria-label={
+        speaking ? "李元貞老師的 Q 版形象，正在說話" : "李元貞老師的 Q 版形象，待機中"
+      }
+    >
+      <div
+        className={speaking ? undefined : "chibi-breathe"}
+        style={{
+          position: "absolute",
+          inset: 0,
+          transform: blinking ? "scaleY(0.985)" : undefined,
+          transformOrigin: "50% 100%",
+          transition: "transform 90ms ease-out",
+        }}
       >
-        <title>對嘴技術驗證用的佔位角色（示意圖，非人物設計）</title>
-
-        {/* 虛線框與角標：讓它一眼就是「示意圖」而不是「一個角色」 */}
-        <rect
-          x="4"
-          y="4"
-          width="192"
-          height="242"
-          rx="14"
-          fill="none"
-          stroke="var(--line)"
-          strokeWidth="1.5"
-          strokeDasharray="7 7"
+        <img
+          src="/chibi/base.webp"
+          alt=""
+          fetchPriority="high"
+          decoding="async"
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
         />
-        <text
-          x="100"
-          y="26"
-          textAnchor="middle"
-          fontSize="10"
-          letterSpacing="1.6"
-          fill="var(--gray)"
-          fontWeight="700"
-        >
-          PLACEHOLDER・示意
-        </text>
 
-        {/* 呼吸：待機時整個人上下浮 2px。講話時停掉，免得跟嘴型互相干擾 */}
-        <g className={speaking ? undefined : "chibi-breathe"}>
-          {/* 身體：一個沒有任何服裝細節的圓角柱 */}
-          <path
-            d="M58 246 V200 a42 42 0 0 1 84 0 V246 Z"
-            fill="var(--brand-soft)"
-            stroke="var(--ink)"
-            strokeWidth="3"
-            strokeLinejoin="round"
+        {/* 四張嘴型全部掛上去、用 opacity 切換。
+            ⚠️ 不要改成只渲染當前那一張：那樣每個嘴型第一次出現時要現載，
+            會在講第一句話的時候閃四次。全部掛著等於掛載時就預載完。 */}
+        {VISEME_ORDER.map((v) => (
+          <img
+            key={v}
+            src={MOUTH_SRC[v]}
+            alt=""
+            decoding="async"
+            style={{
+              position: "absolute",
+              left: MOUTH_BOX.left,
+              top: MOUTH_BOX.top,
+              width: MOUTH_BOX.width,
+              height: MOUTH_BOX.height,
+              opacity: v === viseme ? 1 : 0,
+              transform: v === viseme ? `scale(${mouthScale})` : undefined,
+              transformOrigin: "50% 20%",
+              // ⚠️ 不要加 opacity 的 transition。嘴型每 40ms 就換一次，
+              // 補間會讓兩張嘴同時半透明疊著，看起來是糊的而不是順的。
+              willChange: "opacity",
+            }}
           />
-          {/* 脖子 */}
-          <rect
-            x="91"
-            y="132"
-            width="18"
-            height="28"
-            rx="6"
-            fill="var(--brand-soft)"
-            stroke="var(--ink)"
-            strokeWidth="3"
-          />
-          {/* 頭：一個圓。沒有髮型、沒有耳朵、沒有鼻子 */}
-          <circle cx="100" cy="92" r="52" fill="var(--brand-wash)" stroke="var(--ink)" strokeWidth="3" />
+        ))}
+      </div>
 
-          {/* 眼睛：兩顆點。眨眼是把它壓扁，不是換圖 */}
-          <g className="chibi-eye" transform={`translate(78 84) scale(1 ${eyeScaleY})`}>
-            <ellipse cx="0" cy="0" rx="6.5" ry="8.5" fill="var(--ink)" />
-          </g>
-          <g className="chibi-eye" transform={`translate(122 84) scale(1 ${eyeScaleY})`}>
-            <ellipse cx="0" cy="0" rx="6.5" ry="8.5" fill="var(--ink)" />
-          </g>
-
-          {/*
-            嘴：一顆單位橢圓 ＋ 縮放。
-            ⚠️ 用縮放而不是四條 path，是為了讓瀏覽器可以在兩個嘴型之間補間——
-            分析器每 40ms 才給一幀，硬切會有階梯感。60ms 的過渡剛好把階梯磨掉，
-            又短到不會讓嘴慢半拍。
-          */}
-          <g className="chibi-mouth" transform={`translate(100 118) scale(${shape.sx} ${sy})`}>
-            <ellipse cx="0" cy="0" rx="1" ry="1" fill="var(--ink)" />
-          </g>
-        </g>
-      </svg>
-    </div>
-  );
-}
-
-const CHIBI_CSS = `
-.chibi-svg { display: block; width: 100%; height: auto; }
-.chibi-mouth { transition: transform 60ms linear; }
-.chibi-eye { transition: transform 60ms linear; }
-.chibi-breathe { animation: chibi-breathe 4s ease-in-out infinite; }
+      <style>{`
+.chibi-breathe { animation: chibi-breathe 4.2s ease-in-out infinite; }
 @keyframes chibi-breathe {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(2px); }
+  0%, 100% { transform: translateY(0) }
+  50%      { transform: translateY(-0.6%) }
 }
 @media (prefers-reduced-motion: reduce) {
   .chibi-breathe { animation: none; }
-  .chibi-mouth, .chibi-eye { transition: none; }
 }
-`;
+      `}</style>
+    </div>
+  );
+}
