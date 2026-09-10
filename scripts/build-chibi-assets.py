@@ -33,7 +33,11 @@ OUT = "public/chibi"
 # 這幾個是針對第一版立繪量出來的。換圖務必重量（腳本會印出實際值）。
 SHIRT_TEXT_ROWS = (460, 510)   # 生成出來的英文字樣所在的橫帶
 MOUTH_BOX = (159, 274, 228, 310)  # 要挖掉的嘴（左右留白給法令紋，勿放寬）
+EYE_ZONE = (180, 90, 270, 300)    # 找眼睛的範圍 (y0,x0,y1,x1)，避開眉毛與鼻子
 BG_TOL = 22.0
+# 輸出倍率。⚠️ 底圖是等比放大，不會有新細節（來源人物只有 382×672）；
+# 真正變銳利的是「程式畫的」那些——四個嘴型與閉眼弧線，它們是原生 2 倍。
+SCALE = 2
 LINE, INNER, TONGUE, LIP = (64,29,14,255), (92,42,36,255), (198,110,110,255), (233,168,144,255)
 DEPTH = {"closed": 0.0, "small": 7.0, "mid": 16.0, "wide": 27.0}
 SS = 8  # 超取樣倍率
@@ -197,14 +201,76 @@ def main(src):
     bx0 = min(b[0] for b in boxes)-2; bx1 = max(b[1] for b in boxes)+3
     by0 = min(b[2] for b in boxes)-2; by1 = max(b[3] for b in boxes)+3
 
-    base.save(f"{OUT}/base.webp", "WEBP", quality=92, method=6)
+    base.resize((FW*SCALE, FH*SCALE), Image.LANCZOS) \
+        .save(f"{OUT}/base.webp", "WEBP", quality=92, method=6)
+    mw, mh = (bx1-bx0)*SCALE, (by1-by0)*SCALE
     for name, L in layers.items():
-        L.crop((bx0, by0, bx1, by1)).save(f"{OUT}/mouth-{name}.webp", "WEBP", quality=95, method=6)
+        L.crop((bx0, by0, bx1, by1)).resize((mw, mh), Image.LANCZOS) \
+         .save(f"{OUT}/mouth-{name}.webp", "WEBP", quality=95, method=6)
 
-    print("\n把下面這組數字貼進 components/avatar/ChibiAvatar.tsx 的 MOUTH_BOX：")
-    print(json.dumps({"left": f"{bx0/FW*100:.3f}%", "top": f"{by0/FH*100:.3f}%",
-                      "width": f"{(bx1-bx0)/FW*100:.3f}%", "height": f"{(by1-by0)/FH*100:.3f}%",
-                      "FIGURE_ASPECT": f"{FW} / {FH}"}, ensure_ascii=False, indent=2))
+    # 7. 閉眼素材
+    ez0, ex0, ez1, ex1 = EYE_ZONE
+    dark = (fa[:, :, :3].sum(axis=2) < 260) & (fa[:, :, 3] > 0)
+    zone = np.zeros((FH, FW), bool); zone[ez0:ez1, ex0:ex1] = True
+    elab, en = label(dark & zone)
+    sizes = np.bincount(elab.ravel())[1:]
+    order = np.argsort(sizes)[::-1]
+    # 最大的那塊是眼鏡框（橫跨兩個鏡片），⚠️ 絕對不可以挖掉；接下來兩塊才是眼球
+    frame_id = int(order[0]) + 1
+    eye_ids = [int(order[1]) + 1, int(order[2]) + 1]
+    boxes_e = []
+    for cid in eye_ids:
+        ey, ex = np.where(elab == cid)
+        boxes_e.append((ex.min(), ex.max(), ey.min(), ey.max()))
+    print(f"  眼球 {[(b[0], b[2]) for b in boxes_e]}  鏡框連通塊 #{frame_id}（保留）")
+
+    # 🔴 遮罩要「深色連通塊 ∪ 橢圓」的聯集。
+    #    只用連通塊 → 白色高光留在臉上，變成兩顆浮著的白斑。
+    #    只用橢圓   → 睫毛的尖端留在外面，眨眼時閃一下。
+    comp = np.isin(elab, eye_ids)
+    for _ in range(3):
+        comp |= np.roll(comp,1,0)|np.roll(comp,-1,0)|np.roll(comp,1,1)|np.roll(comp,-1,1)
+    yy, xx = np.mgrid[0:FH, 0:FW]
+    ell = np.zeros((FH, FW), bool)
+    for x0e, x1e, y0e, y1e in boxes_e:
+        cxe, cye = (x0e+x1e)/2, (y0e+y1e)/2
+        ell |= ((xx-cxe)/((x1e-x0e)/2+5))**2 + ((yy-cye)/((y1e-y0e)/2+5))**2 <= 1.0
+    me = (comp | ell) & (elab != frame_id) & (fa[:, :, 3] > 0)
+    eyeless = inpaint(fa.astype(float), me)
+
+    EL = Image.new("RGBA", (FW*SS, FH*SS), (0,0,0,0)); de = ImageDraw.Draw(EL)
+    for x0e, x1e, y0e, y1e in boxes_e:
+        cxe, cye = (x0e+x1e)/2, (y0e+y1e)/2
+        half, arch, N = (x1e-x0e)/2*1.05, 9.0, 90
+        t_, b_ = [], []
+        for i in range(N+1):
+            t = -1 + 2*i/N
+            x = cxe + t*half
+            # ∩ 形：中央高、兩端下垂。她在笑，∩ 比 ⌒ 自然（⌒ 會變成疲倦或難過）
+            yc = cye + arch*t*t - arch*0.30
+            w = 1.0 + 4.4*max(0.0, 1-t*t)**0.45
+            t_.append((x*SS, (yc-w/2)*SS)); b_.append((x*SS, (yc+w/2)*SS))
+        de.polygon(t_ + b_[::-1], fill=LINE)
+    closed = Image.fromarray(eyeless.clip(0,255).astype(np.uint8), "RGBA")
+    closed.alpha_composite(EL.resize((FW, FH), Image.LANCZOS))
+
+    exs = [b[0] for b in boxes_e] + [b[1] for b in boxes_e]
+    eys = [b[2] for b in boxes_e] + [b[3] for b in boxes_e]
+    ex0b, ex1b = min(exs)-6, max(exs)+7
+    ey0b, ey1b = min(eys)-8, max(eys)+9
+    # ⚠️ 這是不透明矩形，直接蓋在睜眼的底圖上——所以底圖不需要挖眼睛
+    closed.crop((ex0b, ey0b, ex1b, ey1b)) \
+          .resize(((ex1b-ex0b)*SCALE, (ey1b-ey0b)*SCALE), Image.LANCZOS) \
+          .save(f"{OUT}/eyes-closed.webp", "WEBP", quality=95, method=6)
+
+    print("\n把下面這組數字貼進 components/avatar/ChibiAvatar.tsx：")
+    print(json.dumps({
+        "FIGURE_ASPECT": f"{FW} / {FH}",
+        "MOUTH_BOX": {"left": f"{bx0/FW*100:.3f}%", "top": f"{by0/FH*100:.3f}%",
+                      "width": f"{(bx1-bx0)/FW*100:.3f}%", "height": f"{(by1-by0)/FH*100:.3f}%"},
+        "EYES_BOX": {"left": f"{ex0b/FW*100:.3f}%", "top": f"{ey0b/FH*100:.3f}%",
+                     "width": f"{(ex1b-ex0b)/FW*100:.3f}%", "height": f"{(ey1b-ey0b)/FH*100:.3f}%"},
+    }, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

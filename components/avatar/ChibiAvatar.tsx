@@ -45,12 +45,39 @@ import { VISEME_ORDER, type Viseme } from "@/lib/avatar/lipsync";
  *
  * ## 換成正式美術素材時要動什麼
  *
- * 只要換 `public/chibi/` 底下五張圖，並更新 `MOUTH_BOX` 這四個百分比。
- * props 介面不變，`LipSyncPlayer` 那一側完全不用動。
+ * 跑 `python3 scripts/build-chibi-assets.py <新圖>`，它會重出 `public/chibi/` 底下
+ * 六張圖（底圖、四個嘴型、閉眼），並印出要貼回來的 `FIGURE_ASPECT`、`MOUTH_BOX`、
+ * `EYES_BOX`。props 介面不變，`LipSyncPlayer` 那一側完全不用動。
+ *
+ * ⚠️ 那支腳本裡每個常數都是量出來的，不是試出來的——它記著三個踩過的坑
+ * （去背要跟固定參考色比、球鞋白跟背景只差 1–2 階、眼睛遮罩要用聯集）。
+ * 換圖之後務必核對它印出來的量測值，特別是「立繪」尺寸與「微笑曲線殘差」；
+ * 殘差變大就代表新圖的嘴不是單純的二次曲線，那時候要回去改萃取方式。
  */
 
 /** 立繪的原始尺寸。用來鎖住外框比例，換圖時要一起更新 */
 const FIGURE_ASPECT = "382 / 672";
+
+/**
+ * ⚠️ 素材是 2 倍輸出（底圖 764×1344），但**人物在來源圖裡只有 382×672**。
+ *
+ * 也就是說底圖是等比放大的，沒有新細節——放大只是讓瀏覽器不必自己重取樣
+ * （LANCZOS 比瀏覽器的雙線性銳一點，但那是重取樣品質，不是解析度）。
+ * 真正變銳利的是**程式畫的那些**：四個嘴型與閉眼弧線是原生 2 倍。
+ * 那剛好是會動、視線會跟著跑的部分。
+ *
+ * 🔴 臉本身要更清楚，只有一條路：請對方用同一個 prompt 重出一張更大的來源圖，
+ * 然後重跑 `scripts/build-chibi-assets.py`。放大演算法救不了。
+ * 換算：滿版 1080 高要放大 1.6 倍，1440 要 2.1 倍。
+ */
+
+/** 閉眼圖層的位置。⚠️ 這是**不透明**矩形，直接蓋住底圖上睜著的眼睛 */
+const EYES_BOX = {
+  left: "25.654%",
+  top: "28.720%",
+  width: "49.215%",
+  height: "8.482%",
+} as const;
 
 /**
  * 嘴型圖層在立繪上的位置（相對百分比，換圖要重量）。
@@ -82,10 +109,15 @@ export default function ChibiAvatar({ viseme, level, speaking, className }: Chib
   const [blinking, setBlinking] = useState(false);
 
   /**
-   * 眨眼。⚠️ 目前是整張圖極短暫的垂直壓縮，不是真的閉眼——
-   * 真正的閉眼需要另外兩張眼睛素材（她戴眼鏡，鏡片區的膚色跟臉頰不同，
-   * 挖眼睛比挖嘴麻煩）。這是刻意的取捨：沒有任何眨眼會讓她看起來像死掉的。
-   * 換到正式素材時應該改成眼睛圖層。
+   * 眨眼：蓋上一張不透明的閉眼圖層。
+   *
+   * 挖眼睛比挖嘴麻煩，兩個坑都踩過（作法見 `scripts/build-chibi-assets.py`）：
+   * 遮罩必須是「深色連通塊 ∪ 橢圓」的聯集——只用連通塊，眼睛的白色高光會留在
+   * 臉上變成兩顆浮著的白斑；只用橢圓，睫毛尖端會留在外面，眨眼時閃一下。
+   * 而眼鏡框是另一個連通塊，必須排除在遮罩之外，否則鏡框會跟著被挖掉。
+   *
+   * ⚠️ 間隔刻意帶隨機（2.8–5.4 秒）。固定間隔的眨眼比不眨眼更假，
+   * 因為人會察覺到節拍。
    */
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
@@ -118,13 +150,7 @@ export default function ChibiAvatar({ viseme, level, speaking, className }: Chib
     >
       <div
         className={speaking ? undefined : "chibi-breathe"}
-        style={{
-          position: "absolute",
-          inset: 0,
-          transform: blinking ? "scaleY(0.985)" : undefined,
-          transformOrigin: "50% 100%",
-          transition: "transform 90ms ease-out",
-        }}
+        style={{ position: "absolute", inset: 0 }}
       >
         <img
           src="/chibi/base.webp"
@@ -132,6 +158,22 @@ export default function ChibiAvatar({ viseme, level, speaking, className }: Chib
           fetchPriority="high"
           decoding="async"
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+        />
+
+        {/* 閉眼圖層。⚠️ 一直掛著只切 opacity，跟嘴型同一個理由：
+            要預載。第一次眨眼才現載的話，那 110ms 會是空白。 */}
+        <img
+          src="/chibi/eyes-closed.webp"
+          alt=""
+          decoding="async"
+          style={{
+            position: "absolute",
+            left: EYES_BOX.left,
+            top: EYES_BOX.top,
+            width: EYES_BOX.width,
+            height: EYES_BOX.height,
+            opacity: blinking ? 1 : 0,
+          }}
         />
 
         {/* 四張嘴型全部掛上去、用 opacity 切換。
