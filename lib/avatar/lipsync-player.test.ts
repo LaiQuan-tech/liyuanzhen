@@ -58,7 +58,7 @@ class FakeAudioContext {
     return {
       buffer: null as null | { getChannelData(): Float32Array; duration: number },
       onended: null as null | (() => void),
-      connect() {},
+      connect(_target?: unknown) {},
       disconnect() {},
       stop() {},
       start(at: number) {
@@ -127,6 +127,88 @@ function expectedSamples(pcm: Uint8Array): number[] {
   for (let i = 0; i < Math.floor(pcm.byteLength / 2); i++) out.push(view.getInt16(i * 2, true));
   return out;
 }
+
+describe("LipSyncPlayer 的 iOS 輸出路徑", () => {
+  /**
+   * 🔴 這一組鎖的是 iPhone 上「嘴在動但沒聲音」的修法。
+   *
+   * iOS 把純 Web Audio 當環境音：靜音鍵會關掉它，開著麥克風時還可能路由到聽筒。
+   * `<audio>` 元素是媒體播放類別，兩者都不受影響。所以輸出要經
+   * `createMediaStreamDestination()` 接一個 `<audio>`，而且那個元素的 `play()`
+   * 必須在使用者手勢裡（`prime()`）呼叫——少任何一步，症狀都跟沒修一樣。
+   */
+  class MediaCapableContext extends FakeAudioContext {
+    dest = { stream: { id: "fake-stream" }, connectedFrom: 0 };
+    createMediaStreamDestination() {
+      return this.dest;
+    }
+    createBufferSource() {
+      const src = super.createBufferSource();
+      const ctx = this;
+      return { ...src, connect(target?: unknown) { if (target === ctx.dest) ctx.dest.connectedFrom++; } };
+    }
+  }
+  class FakeAudio {
+    static instances: FakeAudio[] = [];
+    srcObject: unknown = null;
+    autoplay = false;
+    playCalls = 0;
+    paused = true;
+    constructor() { FakeAudio.instances.push(this); }
+    play() { this.playCalls++; this.paused = false; return Promise.resolve(); }
+    pause() { this.paused = true; }
+  }
+
+  beforeEach(() => {
+    FakeAudio.instances = [];
+    vi.stubGlobal("window", { AudioContext: MediaCapableContext });
+    vi.stubGlobal("Audio", FakeAudio);
+  });
+
+  it("🔴 prime() 要在手勢裡把 <audio> 元素 play 起來，而且接的是 MediaStream", () => {
+    const player = new LipSyncPlayer();
+    player.prime();
+    expect(FakeAudio.instances).toHaveLength(1);
+    const el = FakeAudio.instances[0];
+    expect(el.playCalls).toBe(1);
+    expect(el.srcObject).toEqual({ id: "fake-stream" });
+    // 冪等：再 prime 一次不會多開一個元素
+    player.prime();
+    expect(FakeAudio.instances).toHaveLength(1);
+  });
+
+  it("🔴 排程的 source 要接到 MediaStreamDestination，不是直接接喇叭", async () => {
+    const player = new LipSyncPlayer();
+    player.prime();
+    await player.play(streamOf([rampPcm(2400), rampPcm(2400)]));
+    const ctx = FakeAudioContext.instances[FakeAudioContext.instances.length - 1] as unknown as MediaCapableContext;
+    expect(ctx.dest.connectedFrom).toBe(2);
+  });
+
+  it("dispose 要把 <audio> 停掉並解除 srcObject——不然元素會抓著串流不放", () => {
+    const player = new LipSyncPlayer();
+    player.prime();
+    const el = FakeAudio.instances[0];
+    player.dispose();
+    expect(el.paused).toBe(true);
+    expect(el.srcObject).toBeNull();
+  });
+
+  /**
+   * ⚠️ 反向：沒有 `Audio`（node 測試環境）或沒有 MediaStreamDestination（舊瀏覽器）
+   * 就退回直接接 destination，行為跟修之前一樣，不可以炸。
+   * 上面「取樣對齊」那些測試跑的就是這條退回路徑。
+   */
+  it("⚠️ 環境缺 Audio 時要安靜退回，不可以炸", async () => {
+    vi.stubGlobal("Audio", undefined);
+    const player = new LipSyncPlayer();
+    expect(() => player.prime()).not.toThrow();
+    await expect(player.play(streamOf([rampPcm(2400)]))).resolves.toBeUndefined();
+    const ctx = FakeAudioContext.instances[FakeAudioContext.instances.length - 1] as unknown as MediaCapableContext;
+    expect(ctx.dest.connectedFrom).toBe(0); // 沒有走 mediaDest
+    expect(ctx.scheduled).toHaveLength(1);   // 但音訊照樣排了
+  });
+});
 
 describe("LipSyncPlayer 取樣對齊", () => {
   /**

@@ -12,12 +12,18 @@
  * 就回報 `onFirstAudio`，後面的還在傳。任何「先 await 整條 stream 再播」的重構
  * 都會把那 7.8 秒加回來，而且症狀只是「感覺有點慢」，不會有錯誤訊息。
  *
- * ## ⚠️ 為什麼不用 `<audio>` 或 `decodeAudioData`
+ * ## ⚠️ 解碼不能用 `<audio>` 或 `decodeAudioData`，但輸出要走 `<audio>`
  *
- * `/api/tts` 回的是**裸 PCM**（16-bit LE / 24 kHz / mono，沒有 RIFF 檔頭，
- * 見 `lib/voice/pcm.ts` 的檔頭）。`<audio>` 與 `decodeAudioData` 都要靠容器格式
+ * 這兩件事要分開講，不然會互相矛盾：
+ *
+ * **解碼**：`/api/tts` 回的是**裸 PCM**（16-bit LE / 24 kHz / mono，沒有 RIFF 檔頭，
+ * 見 `lib/voice/pcm.ts` 的檔頭）。`<audio src>` 與 `decodeAudioData` 都要靠容器格式
  * 判斷取樣率與位元深度，餵裸 PCM 進去一律解不出來。所以走
  * `createBuffer` ＋ `AudioBufferSourceNode`，自己把 Int16 轉成 Float32。
+ *
+ * **輸出**：音訊圖算完之後**不直接接喇叭**，而是經 `createMediaStreamDestination()`
+ * 接進一個 `<audio srcObject>` 元素。這是 iPhone 上「嘴在動但沒聲音」的修法，
+ * 理由見 `mediaDest` 欄位的註解。
  *
  * ## ⚠️ 時間軸不是「開頭時間 ＋ atMs」
  *
@@ -109,6 +115,31 @@ export class LipSyncPlayer {
    */
   private ctx: AudioContext | null = null;
 
+  /**
+   * 🔴 輸出不直接接 `ctx.destination`，而是經過一個 `<audio>` 元素。
+   *
+   * 這是 iPhone 上實際踩到的：**嘴在動、答案有出來、但沒有聲音**。
+   * 嘴會動證明 context 是 running 的、音訊也排進去了——問題純粹在輸出端。
+   * iOS 把「純 Web Audio」當成環境音（ambient）：
+   *   - 靜音鍵會把它整個關掉
+   *   - 頁面同時開著麥克風時，可能被路由到聽筒而不是喇叭
+   * 而 `<audio>`／`<video>` 元素是「媒體播放」類別，兩者都不受影響——
+   * 寫實版走 HeyGen 的 `<video>`，所以同一支手機上它有聲音、Q 版沒有。
+   *
+   * 解法是標準的：`createMediaStreamDestination()` 接一個 `<audio>` 元素，
+   * 音訊圖的輸出就變成媒體播放。代價是多 20–60ms 的輸出延遲，
+   * 低於一幀嘴型（40ms）的量級，實際聽不出來。
+   *
+   * ⚠️ 元素的 `play()` 必須在使用者手勢裡呼叫（跟 resume 同一個理由），
+   * 所以放在 `prime()`。沒有這一步，iOS 會拒絕播放，症狀跟修之前一模一樣。
+   *
+   * ⚠️ 兩個 API 缺任何一個就退回直接接 destination（測試環境沒有 `Audio`；
+   * 太舊的瀏覽器沒有 MediaStreamDestination）。退回時只是回到修之前的行為，
+   * 不會更糟。
+   */
+  private mediaDest: MediaStreamAudioDestinationNode | null = null;
+  private audioEl: HTMLAudioElement | null = null;
+
   private analyser: LipSyncAnalyser | null = null;
   private timeline: VisemeCue[] = [];
   private sources: AudioBufferSourceNode[] = [];
@@ -163,6 +194,9 @@ export class LipSyncPlayer {
   prime(): void {
     const ctx = this.ensureContext();
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    // 🔴 這一行是 iOS 有沒有聲音的關鍵，理由見 `mediaDest` 的註解。
+    // 冪等：已經在播的元素再 play() 一次是 no-op。
+    this.audioEl?.play().catch(() => {});
   }
 
   /**
@@ -302,6 +336,13 @@ export class LipSyncPlayer {
    */
   dispose(): void {
     this.stop();
+    const el = this.audioEl;
+    this.audioEl = null;
+    this.mediaDest = null;
+    if (el) {
+      el.pause();
+      el.srcObject = null;
+    }
     const ctx = this.ctx;
     this.ctx = null;
     ctx?.close().catch(() => {});
@@ -326,6 +367,27 @@ export class LipSyncPlayer {
     } catch {
       this.ctx = new Ctor();
     }
+
+    // 輸出改走 <audio> 元素，理由見 `mediaDest` 欄位的註解。
+    // 兩個能力缺一就不做，退回直接接 destination。
+    if (
+      typeof this.ctx.createMediaStreamDestination === "function" &&
+      typeof Audio !== "undefined"
+    ) {
+      try {
+        const dest = this.ctx.createMediaStreamDestination();
+        const el = new Audio();
+        el.srcObject = dest.stream;
+        el.autoplay = true;
+        // iOS：不要進全螢幕播放器。對純音訊元素沒有實際作用，但也沒有副作用
+        (el as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
+        this.mediaDest = dest;
+        this.audioEl = el;
+      } catch {
+        this.mediaDest = null;
+        this.audioEl = null;
+      }
+    }
     return this.ctx;
   }
 
@@ -349,7 +411,8 @@ export class LipSyncPlayer {
 
     const source = ctx.createBufferSource();
     source.buffer = buffer;
-    source.connect(ctx.destination);
+    // 有 <audio> 路徑就走它（iOS 才有聲音），沒有才直接接喇叭
+    source.connect(this.mediaDest ?? ctx.destination);
 
     const startedAt = Math.max(ctx.currentTime + this.leadSeconds, this.nextAt);
     source.start(startedAt);
