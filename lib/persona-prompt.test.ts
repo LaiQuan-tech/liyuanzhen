@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { buildSystemPrompt } from "@/lib/persona-prompt";
 import type { KnowledgeChunk } from "@/lib/retrieval/types";
 
@@ -87,6 +89,41 @@ describe("人格提示詞", () => {
    * 「不超過 100 字」則全數遵守——原因寫在 persona-prompt.ts 的 HARD_RULES 註解。
    * 🔴 有人要改回句數的話，請先跑 `npm run eval:voice` 拿數字，不要憑感覺改。
    */
+  /**
+   * 🔴 這一條鎖的是「prompt 的名單」與「語料實際有誰」不可以脫節。
+   *
+   * 2026-09-17 換成定稿校樣版時真的發生過：出版方刪掉陳建志那篇、新增李豐那篇，
+   * 而規則 10 的名單還停在舊版。脫節的後果是不對稱的——
+   * 少列一位（李豐）＝ 那篇專文少一層 prompt 保護；
+   * 多列一位（陳建志）＝ 模型被交代要提防一個語料裡根本不存在的人。
+   *
+   * ⚠️ 這種不一致不會報錯、不會讓任何測試變紅，只會在某一次回答裡
+   * 讓她用第一人稱講出別人的經歷。所以要靠這條把兩邊綁在一起。
+   */
+  it("🔴 規則 10 的他人敘述名單必須與語料一致", () => {
+    // ⚠️ 用索引迴圈：這個專案的 tsconfig target 低於 ES2015，
+    // matchAll 的 iterator 與 Set 都不能直接用 for...of 迭代。
+    const dir = path.join(process.cwd(), "content/knowledge");
+    const files = fs.readdirSync(dir).filter((n) => n.endsWith(".md"));
+    const names: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const text = fs.readFileSync(path.join(dir, files[i]), "utf-8");
+      const found = text.match(/【他人敘述．(.+?)】/g) ?? [];
+      for (let j = 0; j < found.length; j++) {
+        const n = found[j].replace("【他人敘述．", "").replace("】", "");
+        if (names.indexOf(n) === -1) names.push(n);
+      }
+    }
+    expect(names.length).toBeGreaterThan(0); // 語料真的有標記，不是空集合白白通過
+
+    const p = buildSystemPrompt([chunk()]);
+    for (let i = 0; i < names.length; i++) {
+      expect(p, `語料有【他人敘述．${names[i]}】，規則 10 卻沒列到`).toContain(names[i]);
+    }
+    // 反向：名單不可以列語料裡沒有的人（陳建志已被定稿版刪除）
+    expect(p).not.toContain("陳建志");
+  });
+
   it("字數上限與引導看書的指示要在", () => {
     const p = buildSystemPrompt([chunk()]);
     expect(p).toContain("整段不超過 100 字");
