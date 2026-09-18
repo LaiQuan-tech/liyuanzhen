@@ -249,6 +249,30 @@ function citations(text: string): { raw: string; title: string }[] {
  * 沒有任何參考資料卻能講出篇名，那定義上就是編的。
  * （實務上到不了這裡：route 在 inScope=false 時就直接婉拒了。）
  */
+/**
+ * 否認句與歸屬句：「不是我」「我沒有…過」「這是某某談我的部分」「那是李豐醫師寫的專文」。
+ *
+ * 這正是 persona-prompt 規則 10 規定她要講的話。但它們跟檢索到的（他人敘述）chunk
+ * 天生不重疊——chunk 講的是李豐在臺大醫院的日子，正確答案講的是「那不是我，我在大學教中文」。
+ * 實測一句完全正確的歸屬答案落地率 11.3%，差 0.7 個百分點就被攔成罐頭句（正式站 3 次裡 1 次）。
+ *
+ * 所以先把這類句子剝掉，只對剩下的**實質主張**算落地率。否認本身不是預訓練編得出來的內容；
+ * 會編造的是否認後面接的那句，而那句仍然要落地。
+ *
+ * ⚠️ 代價：騎在否認句後面、不足 MIN_CHARS 的短編造會跟著被跳過。那是 MIN_CHARS 本來就有的
+ * 限制，不是這裡新增的；樣式護欄與 prompt 仍在。
+ * ⚠️ 要在**原文**上斷句：cjkOnly 會把句號剝掉，之後就分不出句子了。
+ */
+const DENIAL_SENTENCE =
+  /(不是我|並非我|我沒有[^。！？；]{0,10}過|我不曾|我從未|談我的部分|不是我的經歷|不是我本人|是[^。！？；]{1,8}(寫的|談的|說的|的專文|的文章|談到的|的經歷)|其實是[^。！？；]{1,8}(醫師|老師|寫))/;
+
+function stripDenials(raw: string): string {
+  return raw
+    .split(/[。！？；\n]/)
+    .filter((sentence) => !DENIAL_SENTENCE.test(sentence))
+    .join("。");
+}
+
 export function groundingCheck(text: string, context: GuardContext): GroundingVerdict {
   const contextCjk = cjkOnly(
     [context.question, ...context.chunks.flatMap((c) => [c.title, c.content])].join("\n")
@@ -280,7 +304,8 @@ export function groundingCheck(text: string, context: GuardContext): GroundingVe
     return { blocked: false, rate: null, skipped: "婉拒句" };
   }
 
-  const core = stripBoilerplate(answerCjk);
+  // 先剝否認／歸屬句（理由見 DENIAL_SENTENCE），再剝固定用語，剩下的才是要落地的實質主張
+  const core = stripBoilerplate(cjkOnly(stripDenials(text)));
   if (core.length < MIN_CHARS) {
     return { blocked: false, rate: null, skipped: `剝掉固定用語後只剩 ${core.length} 字` };
   }

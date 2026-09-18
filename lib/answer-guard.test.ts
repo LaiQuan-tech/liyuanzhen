@@ -349,3 +349,34 @@ describe("createGuardedWriter ＋ 落地檢查", () => {
     expect(out.join("")).toBe(九十九字); // finish 後：整段一次出現
   });
 });
+
+describe("否認句與歸屬句不算落地率", () => {
+  const lifengChunk = {
+    title: "第 5 章 擎起婦運火炬 · 【他人敘述．李豐】助人最樂―我與元貞",
+    content:
+      "當時在臺大醫院服務的女醫師相當少，能留下來與男醫師同出同進的往往非常傑出。可是，這些頂尖女性有許多旁人看不見的辛酸。她們其實和所有婦女同胞一樣要面對生活和就業上的諸多問題。",
+  };
+  const ctx = { question: "你在臺大醫院當醫師的那段日子？", chunks: [lifengChunk] };
+
+  it("🔴 正式站被誤攔的那段正確歸屬答案，現在不可以攔", () => {
+    // 這是 interactions 表裡 blocked=true 的原文，落地率 11.3%，差 0.7 個百分點。
+    const text =
+      "我沒有在臺大醫院當過醫師，我一直是在大學教中文。你提到的臺大女醫師經歷，其實是李豐醫師寫的專文，談到當時女醫師面對的職場辛酸。在《我來了！臺灣婦女改變了》書中，有收錄李豐這篇完整的紀錄。";
+    expect(groundingCheck(text, ctx).blocked).toBe(false);
+  });
+
+  it("否認句後面接的實質編造仍然要攔——否認不是護身符", () => {
+    const text =
+      "我沒有當過立委。不過我在一九九零年代擔任台北市議員兩屆，推動了許多市政改革，大家都很肯定我的政績。";
+    const v = groundingCheck(text, ctx);
+    expect(v.blocked).toBe(true);
+    expect(v.reason).toContain("落地率");
+  });
+
+  it("余光中那段洩漏原文沒有否認句，剝除後仍是 0%，照攔", () => {
+    const leaked =
+      "他在文章中指控鄉土文學，說那是工農兵文藝，這無異在明示軍方抓人。文壇祭酒竟然變成了打手，直教我們老師和年輕人傻眼，也讓好些作家入罪。";
+    const c = { question: "余光中的狼來了那篇文章你怎麼看？", chunks: [{ title: "第 4 章 淡江時光—為人師表 · 邁不出", content: "此外我還教黃春明、王禎和、鍾理和、鍾肇政、楊逵、余光中，陳秀喜、杜潘芳格的詩也包含在我的教材裡。" }] };
+    expect(groundingCheck(leaked, c).blocked).toBe(true);
+  });
+});
