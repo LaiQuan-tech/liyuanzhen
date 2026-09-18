@@ -176,12 +176,17 @@ export async function POST(request: NextRequest) {
       let blocked = false;
       let failed = false;
 
+      // 🔴 第三個參數是落地檢查要用的出處。給了它，護欄才會在 finish() 時
+      // 驗「答案的字在檢索到的東西裡找不找得到」——擋的是模型用預訓練知識
+      // 編出一整段語料裡沒有的話（實際發生過，見 lib/answer-guard.ts 的說明）。
+      // 攔截原因（「落地率 3%」「未落地引用：〈狼來了〉」）會從 matched 帶進下面的 warn。
       const writer = createGuardedWriter(
         (text) => controller.enqueue(encoder.encode(text)),
         (matched) => {
           blocked = true;
           console.warn("[chat] 輸出護欄攔截：", matched);
-        }
+        },
+        { question, chunks: result.chunks }
       );
 
       try {
