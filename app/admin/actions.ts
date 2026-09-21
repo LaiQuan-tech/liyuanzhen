@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAdmin } from "@/lib/admin-auth";
+import { requireStaff } from "@/lib/admin-auth";
+import { writeAudit } from "@/lib/audit";
 import {
   createEvent,
   updateEvent,
@@ -14,11 +15,18 @@ import {
 /**
  * 後台的寫入動作。
  *
- * 🔴 **每一支的第一行都是 `await requireAdmin()`。** 沒有例外。
+ * 🔴 **每一支的第一行都是 `const actor = await requireStaff()`。** 沒有例外。
  *
  * server action 是一個可以被直接呼叫的端點——瀏覽器 devtools 裡就打得到，
  * middleware 擋不住。少寫一支，那一支就是整個後台的洞。
  * 新增 action 的時候先寫這一行，再寫其他的。
+ *
+ * ⚠️ 這裡是 `requireStaff()` 不是 `requireManager()`：場次上架是小編的工作。
+ * 人員管理與操作日誌那兩支才需要 requireManager()。
+ *
+ * 🔴 **每一支都要 `await writeAudit(actor, …)`。**
+ * 這個站的稽核是應用層寫的（理由見 0006 第四節），漏一支就等於那種操作
+ * 從來不會留下紀錄，而且不會有任何徵兆。`lib/audit/coverage.test.ts` 會掃這個檔。
  *
  * ⚠️ 這些函式沒辦法用 curl 測（server action 的呼叫協定含有 Next 產生的 id），
  * 要驗權限就在瀏覽器裡用一個沒有 admin 角色的帳號登入後實際操作。
@@ -52,7 +60,7 @@ export async function saveEventAction(
   _prev: ActionState,
   form: FormData
 ): Promise<ActionState> {
-  await requireAdmin();
+  const actor = await requireStaff();
 
   const id = String(form.get("id") ?? "").trim();
   const input = readForm(form);
@@ -63,8 +71,20 @@ export async function saveEventAction(
   try {
     if (id) {
       await updateEvent(id, input);
+      await writeAudit(actor, {
+        action: "update",
+        entity: "event",
+        entityId: id,
+        label: input.title,
+      });
     } else {
-      await createEvent(input);
+      const newId = await createEvent(input);
+      await writeAudit(actor, {
+        action: "insert",
+        entity: "event",
+        entityId: newId,
+        label: input.title,
+      });
     }
   } catch (error) {
     return {
@@ -84,12 +104,23 @@ export async function saveEventAction(
 }
 
 export async function deleteEventAction(form: FormData): Promise<void> {
-  await requireAdmin();
+  const actor = await requireStaff();
   const id = String(form.get("id") ?? "").trim();
   const slug = String(form.get("slug") ?? "").trim();
   if (!id) return;
 
-  await deleteEvent(id);
+  const removed = await deleteEvent(id);
+
+  // 🔴 沒刪到任何一列就不要記。PostgREST 刪 0 列不會報錯，
+  // 照記的話日誌裡就會有一筆沒有發生過的刪除。
+  if (removed) {
+    await writeAudit(actor, {
+      action: "delete",
+      entity: "event",
+      entityId: id,
+      label: removed.title,
+    });
+  }
 
   revalidatePath("/admin");
   revalidatePath("/events");

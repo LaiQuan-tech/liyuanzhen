@@ -1,4 +1,4 @@
-import { currentUser, isAdmin } from "@/lib/admin-auth";
+import { currentUser, isStaff, isManager } from "@/lib/admin-auth";
 import { hasAuthCredentials } from "@/lib/supabase-auth";
 import AdminSidebar from "@/components/admin/AdminSidebar";
 import { signOutAction } from "../auth-actions";
@@ -11,10 +11,13 @@ import { signOutAction } from "../auth-actions";
  *
  * 🔴 這裡的檢查是**第二道**，不是唯一一道。
  * middleware 擋「沒登入」，這裡擋「登入了但沒有權限」，而真正的閘門在每一支
- * server action 開頭的 `requireAdmin()`。頁面層的檢查只保護「看得到什麼」，
- * 保護不了「做得到什麼」——那兩件事在 App Router 裡是分開的。
+ * server action 開頭的 `requireStaff()` / `requireManager()`。頁面層的檢查
+ * 只保護「看得到什麼」，保護不了「做得到什麼」——那兩件事在 App Router 裡是分開的。
  *
- * 🔴 **這個檔案必須留在 server component。** 底下兩個 `await` 就是那第二道檢查；
+ * ⚠️ 這裡擋的是 `isStaff()`（在不在後台白名單），**不是** `isManager()`。
+ * 小編要進得來。分層級的限制在「後台人員」與「操作日誌」那兩頁自己身上。
+ *
+ * 🔴 **這個檔案必須留在 server component。** 底下那幾個 `await` 就是那第二道檢查；
  * 為了做側邊欄的 active 高亮或手機收合而在這裡加 "use client"，會讓它們整個失效。
  * 那些需要 client 的部分關在 `components/admin/AdminSidebar.tsx` 那一片葉子裡。
  *
@@ -42,16 +45,16 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   }
 
   const user = await currentUser();
-  const admin = await isAdmin();
+  const staff = await isStaff();
 
-  if (!admin) {
+  if (!staff) {
     return (
       <main className="mx-auto max-w-lg px-6 py-24">
-        <h1 className="font-display text-[22px] font-bold">此帳號沒有管理權限</h1>
+        <h1 className="font-display text-[22px] font-bold">此帳號沒有後台權限</h1>
         <p className="mt-3 text-[14.5px] leading-relaxed text-ink-soft">
-          {user?.email ?? "這個帳號"} 已經登入，但不在管理員名單裡。
-          請聯絡系統管理者把這個帳號加進 <code className="text-[13px]">user_roles</code>，
-          再重新登入。
+          {user?.email ?? "這個帳號"} 已經登入，但不在後台人員名單裡。
+          請找管理員在「後台人員」把這個帳號加進來（管理員或小編都可以），
+          再重新整理這一頁。
         </p>
         <form action={signOutAction} className="mt-6">
           <button
@@ -65,9 +68,13 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     );
   }
 
+  // ⚠️ 只有確定是 staff 之後才問這一題——省一次 RPC，順序也比較好讀。
+  // 它只決定側邊欄顯示哪些項目，不決定那兩頁打不打得開。
+  const manager = await isManager();
+
   return (
     <div className="min-h-screen bg-paper-alt text-ink lg:flex">
-      <AdminSidebar email={user?.email} />
+      <AdminSidebar email={user?.email} isManager={manager} />
       {/*
         ⚠️ `min-w-0` 不能拿掉。flex 子項的預設 min-width 是 auto，
         報名名單與問答紀錄的表格都有 min-w-[…px]，沒有這一行的話

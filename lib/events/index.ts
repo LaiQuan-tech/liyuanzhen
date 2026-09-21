@@ -165,16 +165,31 @@ export async function updateEvent(id: string, input: EventInput): Promise<void> 
 }
 
 /**
- * 刪除場次。
+ * 刪除場次。**回傳被刪掉那一列的標題與代稱**，沒刪到任何東西時回 null。
  *
  * ⚠️ 報名紀錄會跟著被 cascade 刪掉（見 migration 的 on delete cascade）。
  * 所以介面上一定要二次確認，而且要把「連同 N 筆報名」講出來——
  * 那些是真人的姓名電話，刪掉就沒了。想留著紀錄就改成 closed，不要刪。
+ *
+ * 🔴 `.select()` 不是為了方便，是稽核日誌需要那個標題。
+ * 刪完之後就查不到了，所以只能在同一個請求裡把它帶回來。
+ *
+ * 🔴 **沒拿到列就回 null，呼叫端不要記日誌。**
+ * PostgREST 刪 0 列不會報錯（id 不存在、或剛被別人刪掉都是這樣）。
+ * 照記的話就是在日誌裡留下一筆沒有發生過的刪除——那比漏記更糟。
  */
-export async function deleteEvent(id: string): Promise<void> {
+export async function deleteEvent(
+  id: string
+): Promise<{ title: string; slug: string } | null> {
   const db = createAdminSupabase();
-  const { error } = await db.from("events").delete().eq("id", id);
+  const { data, error } = await db
+    .from("events")
+    .delete()
+    .eq("id", id)
+    .select("title, slug")
+    .maybeSingle();
   if (error) throw new Error(`刪除失敗：${error.message}`);
+  return (data as { title: string; slug: string } | null) ?? null;
 }
 
 /** 每一場的報名人次（不是筆數，party_size 要加總）。後台列表用。 */

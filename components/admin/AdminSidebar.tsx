@@ -3,14 +3,14 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ADMIN_NAV, isNavActive } from "@/lib/admin-nav";
+import { visibleNav, isNavActive } from "@/lib/admin-nav";
 import { signOutAction } from "@/app/admin/auth-actions";
 
 /**
  * 後台的左側功能列。
  *
  * 🔴 這個檔案是 client component，而 `(dashboard)/layout.tsx` **必須留在 server**——
- * 那裡有 `await currentUser()` / `await isAdmin()` 兩道權限檢查，
+ * 那裡有 `await currentUser()` / `await isStaff()` 兩道權限檢查，
  * 整個 layout 標成 "use client" 的話它們會直接垮掉。
  * 所以需要 client 的兩樣東西（usePathname 的 active 高亮、useState 的手機收合）
  * 全部關在這一片葉子裡，email 由 layout 當 prop 傳進來。
@@ -19,10 +19,20 @@ import { signOutAction } from "@/app/admin/auth-actions";
  * **不要**改用 <details>/<summary> 的純 CSS 版。`open` 是未受控的 DOM 屬性，
  * App Router 換頁時 React 會重用節點，結果選單不會關。
  *
+ * ⚠️ `isManager` 由 layout 傳進來（跟 email 同一個理由：這裡是 client，
+ * 問不到資料庫）。它只決定**看得到哪些項目**，不決定做得到什麼——
+ * 「後台人員」與「操作日誌」真正的守門是那兩頁第一行的 requireManager()。
+ *
  * 樣式刻意不套 .lz-cta / sticker 陰影那一套——那是對外頁面的語言，
  * 後台要的是掃得快、資訊密度高。
  */
-export default function AdminSidebar({ email }: { email?: string }) {
+export default function AdminSidebar({
+  email,
+  isManager = false,
+}: {
+  email?: string;
+  isManager?: boolean;
+}) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -40,7 +50,7 @@ export default function AdminSidebar({ email }: { email?: string }) {
 
   const nav = (
     <nav className="flex flex-col gap-1">
-      {ADMIN_NAV.map((item) => {
+      {visibleNav(isManager).map((item) => {
         const active = isNavActive(pathname, item);
         const className = `rounded-lg px-3 py-2 text-[14.5px] ${
           active ? "bg-brand-wash font-bold text-ink" : "text-muted hover:bg-ink/5 hover:text-ink"
