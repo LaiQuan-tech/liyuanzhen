@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   checkAnswer,
   stripMarkdown,
@@ -169,7 +171,7 @@ describe("groundingCheck", () => {
   it("🔴 實際洩漏過的那段必須被攔——這是這一層存在的理由", () => {
     // 2026-09 正式站真的說過這段話。查證的結果是：這些字在正式庫是 0 塊，
     // 模型拿的是自己的預訓練知識，而它會用她的臉和克隆聲音講出去。
-    // 實測落地率 0%（3-gram 一個都對不上），離 0.12 的門檻很遠。
+    // 實測落地率 0%（3-gram 一個都對不上），離 0.06 的門檻很遠。
     const 洩漏 =
       "他在文章中指控鄉土文學，說那是工農兵文藝，這無異在明示軍方抓人。文壇祭酒竟然變成了打手，直教我們老師和年輕人傻眼，也讓好些作家入罪。";
     const v = groundingCheck(洩漏, {
@@ -195,7 +197,7 @@ describe("groundingCheck", () => {
     expect(v短.blocked).toBe(false);
     expect(v短.rate).toBeNull();
 
-    // 這一個才真的走完落地率：實測 45%，遠高於 0.12。
+    // 這一個才真的走完落地率：實測 45%，遠高於 0.06。
     const 長 =
       "1982 年，我創辦了婦女新知雜誌社，自己擔任發行人，把雜誌當成婦運的思想陣地。1987 年雜誌社改組成婦女新知基金會，我接下第一任董事長。這段在《我來了！臺灣婦女改變了》書裡寫得更完整。";
     const v長 = groundingCheck(長, {
@@ -206,7 +208,7 @@ describe("groundingCheck", () => {
       ],
     });
     expect(v長.blocked).toBe(false);
-    expect(v長.rate).toBeGreaterThan(0.12);
+    expect(v長.rate).toBeGreaterThan(0.06);
   });
 
   describe("引用落地", () => {
@@ -429,5 +431,46 @@ describe("finish() 的 kind 欄位", () => {
 
     expect(result.blocked).toBe(true);
     expect(result.kind).toBe("grounding");
+  });
+});
+
+/**
+ * 🔴 門檻的校準樣本，把「合法轉述會落在 9–11%」這件事鎖進測試。
+ *
+ * 2026-09-22 正式站實際發生：檢索修好之後，這段完全正確的回答（八個孩子、七個弟妹、么妹）
+ * 落地率 10.4%，被 0.12 的舊門檻攔下換成罐頭句。語料塊直接讀自傳第 8 章的兩節，
+ * 所以這條測試同時綁著語料——改寫那兩節而讓這段回答掉到 6% 以下，這裡會先紅。
+ */
+describe("落地率門檻的校準樣本", () => {
+  const md = readFileSync(
+    join(__dirname, "..", "content", "knowledge", "10-autobiography-08.md"),
+    "utf-8"
+  );
+  const section = (heading: string): string => {
+    const start = md.indexOf(`## ${heading}`);
+    const next = md.indexOf("\n## ", start + 1);
+    return md.slice(start, next === -1 ? undefined : next);
+  };
+  const chunks = [
+    { id: "c1", source: "book", sourceUrl: "", title: "第 8 章 我的原生家庭 · 兄弟姊妹", content: section("兄弟姊妹"), similarity: 0.71 },
+    { id: "c2", source: "book", sourceUrl: "", title: "第 8 章 我的原生家庭 · 么妹", content: section("么妹"), similarity: 0.67 },
+  ];
+  const question = "你有幾個兄弟姊妹？";
+  const answer =
+    "我家一共有八個孩子，我是長女，下面有七個弟妹。因為么妹有狀況，我們對外常猶豫說有七個，自動少算她。這些家庭故事，在《我來了！臺灣婦女改變了》寫得更完整。";
+
+  it("正確的第一人稱轉述落在 9–11%，必須放行", () => {
+    const v = groundingCheck(answer, { question, chunks });
+    expect(v.blocked).toBe(false);
+    expect(v.rate).toBeGreaterThan(0.06);
+    expect(v.rate).toBeLessThan(0.2); // 它就是轉述，不會很高；高了代表量法變了，門檻要重校
+  });
+
+  it("同一組參考資料，編出來的話仍然攔得住", () => {
+    const made =
+      "我從小在眷村跟三個哥哥打架長大，父親是海軍軍官，母親開了一家裁縫店，我們家住在左營的日式宿舍。";
+    const v = groundingCheck(made, { question, chunks });
+    expect(v.blocked).toBe(true);
+    expect(v.rate).toBeLessThan(0.06);
   });
 });
