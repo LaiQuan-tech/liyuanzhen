@@ -1,9 +1,9 @@
 import { embedText } from "../embeddings";
-import { expandQuery, type HistoryTurn } from "../query-expansion";
+import { findAnchor, needsContext, withAnchor, type HistoryTurn } from "../query-expansion";
 import { hasSupabase } from "../supabase";
 import { localStore } from "./local";
 import { supabaseStore } from "./supabase";
-import type { RetrievalResult, VectorStore } from "./types";
+import type { KnowledgeChunk, RetrievalResult, VectorStore } from "./types";
 
 export type { KnowledgeChunk, RetrievalResult } from "./types";
 
@@ -29,16 +29,53 @@ function pickStore(): VectorStore {
   return hasSupabase() ? supabaseStore : localStore;
 }
 
+/** 一次「embedding → 取前 TOP_K」。retrieve() 一題最多呼叫兩次。 */
+async function searchOnce(store: VectorStore, query: string): Promise<KnowledgeChunk[]> {
+  const embedding = await embedText(query, "RETRIEVAL_QUERY");
+  return store.search(embedding, TOP_K);
+}
+
 export async function retrieve(
   message: string,
   history: HistoryTurn[] = []
 ): Promise<RetrievalResult> {
   const store = pickStore();
-  const query = expandQuery(message, history);
-  const embedding = await embedText(query, "RETRIEVAL_QUERY");
-  const candidates = await store.search(embedding, TOP_K);
+  const original = message.trim();
 
-  const top = candidates[0]?.similarity ?? 0;
+  /**
+   * 主查詢／備援的取捨（2026-09-22）：
+   *   - 句子形式上是追問（needsContext）且找得到錨點 → 主查詢＝擴展句、備援＝原句。
+   *   - 否則 → 主查詢＝原句、備援＝擴展句（沒有錨點就沒有備援）。
+   * 主查詢的 top 低於 HARD_FLOOR 才動用備援，而且備援自己也要 ≥ HARD_FLOOR 才採用；
+   * 所以一題最多兩次 embedding，多數題目仍只有一次。
+   *
+   * 🔴 不可以改成「兩邊都查、取相似度高的」。實測「你怎麼看待做母親這件事」：
+   * 原句 0.700（第 9 章〈女兒〉，正確）、接上「書中聶湖濱如何述說李元貞」後 0.743
+   * （【他人敘述．聶湖濱】，錯的）——相似度高低分不出哪個才是對的，只有句子本身的
+   * 形式分得出來。所以先後順序由 needsContext 決定，相似度只負責「有沒有命中」。
+   */
+  const anchor = findAnchor(history);
+  const expandedQuery = anchor ? withAnchor(original, anchor) : null;
+  const [primary, fallback]: [string, string | null] =
+    expandedQuery !== null && needsContext(original)
+      ? [expandedQuery, original]
+      : [original, expandedQuery];
+
+  let query = primary;
+  let candidates = await searchOnce(store, primary);
+  let top = candidates[0]?.similarity ?? 0;
+
+  if (top < HARD_FLOOR && fallback !== null) {
+    const retry = await searchOnce(store, fallback);
+    const retryTop = retry[0]?.similarity ?? 0;
+    if (retryTop >= HARD_FLOOR) {
+      query = fallback;
+      candidates = retry;
+      top = retryTop;
+    }
+  }
+
+  const expanded = query !== original;
 
   if (top < HARD_FLOOR) {
     return {
@@ -47,6 +84,8 @@ export async function retrieve(
       inScope: false,
       lowConfidence: true,
       provider: store.name,
+      query,
+      expanded,
     };
   }
 
@@ -59,5 +98,7 @@ export async function retrieve(
     inScope: true,
     lowConfidence: top < SOFT_FLOOR,
     provider: store.name,
+    query,
+    expanded,
   };
 }

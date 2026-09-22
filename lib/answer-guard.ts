@@ -359,6 +359,10 @@ export function createGuardedWriter(
   let pending = "";
   let full = "";
   let blocked = false;
+  // 攔截屬於哪一類，供 finish() 回傳給呼叫端選替代回覆用。
+  // 只在 blocked 由 false→true 的那一刻設一次，跟 blocked 同步，
+  // 這樣就算 finish() 被呼叫第二次也還是報對第一次攔下來的原因。
+  let blockedKind: "pattern" | "grounding" | undefined;
 
   return {
     push(delta: string) {
@@ -369,6 +373,7 @@ export function createGuardedWriter(
       const check = checkAnswer(full);
       if (check.blocked) {
         blocked = true;
+        blockedKind = "pattern";
         onBlocked(check.matched ?? "unknown");
         return;
       }
@@ -379,18 +384,19 @@ export function createGuardedWriter(
         emit(stripMarkdown(flushable));
       }
     },
-    finish(): { text: string; blocked: boolean } {
-      if (blocked) return { text: full, blocked: true };
+    finish(): { text: string; blocked: boolean; kind?: "pattern" | "grounding" } {
+      if (blocked) return { text: full, blocked: true, kind: blockedKind };
 
       if (context) {
         const verdict = groundingCheck(full, context);
         if (verdict.blocked) {
           blocked = true;
+          blockedKind = "grounding";
           // 🔴 一定要在 emit 之前丟掉 pending。整段答案都還扣在緩衝裡，
           // 這一行就是「有出處才放行」真正生效的地方。
           pending = "";
           onBlocked(verdict.reason ?? "未落地");
-          return { text: full, blocked: true };
+          return { text: full, blocked: true, kind: "grounding" };
         }
       }
 

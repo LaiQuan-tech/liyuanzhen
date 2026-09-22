@@ -5,7 +5,7 @@ import { createGuardedWriter } from "@/lib/answer-guard";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { logInteraction } from "@/lib/interaction-log";
 import type { InteractionChannel } from "@/lib/interaction-log";
-import { OUT_OF_SCOPE_REPLY, GUARDED_REPLY } from "@/content/site";
+import { OUT_OF_SCOPE_REPLY, GUARDED_REPLY, UNGROUNDED_REPLY } from "@/content/site";
 import type { HistoryTurn } from "@/lib/query-expansion";
 
 export const runtime = "nodejs";
@@ -201,7 +201,11 @@ export async function POST(request: NextRequest) {
         answer = finished.text;
         if (finished.blocked || blocked) {
           blocked = true;
-          controller.enqueue(encoder.encode(GUARDED_REPLY));
+          // kind 分辨兩種攔截原因：pattern＝封鎖清單命中（政治表態／新承諾），
+          // grounding＝落地率不足或未落地引用。分不出來（理論上不會發生，
+          // 只是防呆）時退回 GUARDED_REPLY。見 content/site.ts 兩句上方的註解。
+          const reply = finished.kind === "grounding" ? UNGROUNDED_REPLY : GUARDED_REPLY;
+          controller.enqueue(encoder.encode(reply));
         }
       } catch (err) {
         console.error("[chat] 生成失敗：", err);

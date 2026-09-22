@@ -32,6 +32,7 @@ import {
   ANSWER_DISCLAIMER,
   SITE_NOTICE,
   GUARDED_REPLY,
+  UNGROUNDED_REPLY,
   liveCopy,
 } from "@/content/site";
 
@@ -345,8 +346,14 @@ export default function LiveStage({
 
       trace("答案完成", `${full.length} 字`);
 
-      // ⚠️ 護欄 2：送 speakableAnswer，不是 full。
-      stageRef.current?.finish(speakableAnswer(full, GUARDED_REPLY));
+      // ⚠️ 護欄 2：送 speakableAnswer，不是 full。兩種婉拒句都要檢查回收
+      //    （GUARDED_REPLY＝封鎖清單、UNGROUNDED_REPLY＝落地失敗，見
+      //    app/api/chat/route.ts 的 kind 分流），理由跟 ChatPanel.tsx 同一處註解。
+      const toSpeak = speakableAnswer(
+        speakableAnswer(full, GUARDED_REPLY),
+        UNGROUNDED_REPLY
+      );
+      stageRef.current?.finish(toSpeak);
     } catch (error) {
       trace("這一輪失敗", error instanceof Error ? error.message : String(error), "error");
       if (!stale()) setNotice(liveCopy.failed);

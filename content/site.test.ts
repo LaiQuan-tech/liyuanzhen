@@ -5,6 +5,7 @@ import {
   AVATAR_NAME,
   OUT_OF_SCOPE_REPLY,
   GUARDED_REPLY,
+  UNGROUNDED_REPLY,
 } from "@/content/site";
 
 /**
@@ -31,6 +32,7 @@ describe("文案的人稱分工", () => {
     for (const [name, line] of [
       ["OUT_OF_SCOPE_REPLY", OUT_OF_SCOPE_REPLY],
       ["GUARDED_REPLY", GUARDED_REPLY],
+      ["UNGROUNDED_REPLY", UNGROUNDED_REPLY],
     ] as const) {
       expect(line, name).toContain("我");
       // ⚠️ 這兩句以前寫「我能談的是李元貞老師的生平」——第一人稱語氣配第三人稱自稱
@@ -50,7 +52,7 @@ describe("文案的人稱分工", () => {
   });
 
   it("會被 TTS 唸出來的句子不可以有 Markdown 符號", () => {
-    for (const line of [OUT_OF_SCOPE_REPLY, GUARDED_REPLY]) {
+    for (const line of [OUT_OF_SCOPE_REPLY, GUARDED_REPLY, UNGROUNDED_REPLY]) {
       expect(line).not.toMatch(/[*#`]|^\s*[-•]/m);
     }
   });

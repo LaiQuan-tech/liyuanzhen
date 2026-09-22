@@ -16,6 +16,13 @@ export interface RetrievalResult {
   lowConfidence: boolean;
   /** 實際使用的檢索來源，方便除錯與驗收 */
   provider: "local" | "supabase";
+  /**
+   * 實際拿去 embedding 的查詢字串（原句，或接了上一題錨點的擴展句），供除錯與對話重放驗收。
+   * ⚠️ 必須是可選：app/api/chat/route.ts 檢索失敗時有一個手寫的 fallback 物件沒有這兩欄。
+   */
+  query?: string;
+  /** true 代表最後採用的是擴展句（接了上一題當錨點）；同上，可選 */
+  expanded?: boolean;
 }
 
 export interface VectorStore {

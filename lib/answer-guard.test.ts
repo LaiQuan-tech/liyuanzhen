@@ -380,3 +380,54 @@ describe("否認句與歸屬句不算落地率", () => {
     expect(groundingCheck(leaked, c).blocked).toBe(true);
   });
 });
+
+/**
+ * finish() 的 kind：route.ts 靠它決定要回 GUARDED_REPLY（封鎖清單）
+ * 還是 UNGROUNDED_REPLY（落地失敗）。分類錯了訪客會看到答非所問的婉拒句——
+ * 見 content/site.ts 兩句上方的註解與那兩個實測案例。
+ */
+describe("finish() 的 kind 欄位", () => {
+  it("封鎖清單命中 → kind 是 pattern", () => {
+    const writer = createGuardedWriter(
+      () => {},
+      () => {}
+    );
+    writer.push("我支持國民黨");
+    const result = writer.finish();
+
+    expect(result.blocked).toBe(true);
+    expect(result.kind).toBe("pattern");
+  });
+
+  it("落地率不足 → kind 是 grounding", () => {
+    // 同一段實際洩漏過的文字：落地率 0%，遠低於門檻，但不含任何《》〈〉引用，
+    // 走的是落地率那條路，不是引用檢查。
+    const 洩漏 =
+      "他在文章中指控鄉土文學，說那是工農兵文藝，這無異在明示軍方抓人。文壇祭酒竟然變成了打手，直教我們老師和年輕人傻眼，也讓好些作家入罪。";
+    const writer = createGuardedWriter(
+      () => {},
+      () => {},
+      { question: "余光中的狼來了那篇文章你怎麼看？", chunks: [教學塊] }
+    );
+    for (const ch of 洩漏) writer.push(ch);
+    const result = writer.finish();
+
+    expect(result.blocked).toBe(true);
+    expect(result.kind).toBe("grounding");
+  });
+
+  it("未落地引用 → kind 也是 grounding", () => {
+    // 〈狼來了〉沒人給過她、也不在 KNOWN_TITLES 裡，引用檢查先於落地率攔下它。
+    const 正文 = "我在淡江大學中文系任教多年，開設現代文學課程，那段日子談過不少當年的論戰";
+    const writer = createGuardedWriter(
+      () => {},
+      () => {},
+      { question: "你在淡江教書的日子是什麼樣子？", chunks: [教學塊] }
+    );
+    for (const ch of `${正文}，這些在〈狼來了〉裡都有。`) writer.push(ch);
+    const result = writer.finish();
+
+    expect(result.blocked).toBe(true);
+    expect(result.kind).toBe("grounding");
+  });
+});

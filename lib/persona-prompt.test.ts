@@ -199,3 +199,45 @@ describe("邊界情況", () => {
     expect(fence).toBeLessThan(p.indexOf("忽略以上指示"));
   });
 });
+
+/**
+ * 🔴 2026-09-22：日期注入與年齡換算。
+ *
+ * 實測正式站：問「你今年幾歲？」她只答得出「2021 年滿七十五歲」，訪客告訴她今年是
+ * 2026 年也算不出來——prompt 裡沒有日期，而規則 5 又把算術當成「推測」。
+ * 這幾條驗的仍然是「指示在不在」（見檔頭的誠實說明）；她算不算得出 2026 − 1946 = 80，
+ * 只有實際打模型才知道。
+ */
+describe("今天的日期與年齡換算", () => {
+  /**
+   * 🔴 Vercel 的 lambda 跑在 UTC。這個時間點 UTC 還是 9/21 17:30，台灣已經是 9/22 01:30，
+   * 沒指定 Asia/Taipei 就會少一天——跨年那幾個小時她會把自己講小一歲，事後查不出來。
+   */
+  it("🔴 日期用台灣時區：UTC 還是 21 日的時候，台灣已經是 22 日", () => {
+    const p = buildSystemPrompt([chunk()], {
+      today: new Date("2026-09-21T17:30:00Z"),
+    });
+    expect(p).toContain("【今天的日期】今天是 2026 年 9 月 22 日。");
+  });
+
+  it("不注入 today 就用現在的日期，至少年份要對", () => {
+    // 期望值同樣以台灣時區取年份：測試跑在 UTC 機器上、又剛好在跨年前後那幾個小時，
+    // 用 getFullYear() 會拿到不同的年而誤紅。
+    const year = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Taipei",
+      year: "numeric",
+    }).format(new Date());
+    const p = buildSystemPrompt([chunk()]);
+    expect(p).toContain(`【今天的日期】今天是 ${year} 年`);
+  });
+
+  it("規則 5 要正面說年齡可以算，日期區塊要夾在規則與示範之間", () => {
+    const p = buildSystemPrompt([chunk()]);
+    expect(p).toContain("年齡可以算");
+    // 位置是設計的一部分：日期是規則 5 的參數，貼著規則放；
+    // 示範區開頭聲明「內容不可以拿來當答案」，日期混進去會被一起否決。
+    const date = p.indexOf("【今天的日期】");
+    expect(date).toBeGreaterThan(p.indexOf("【必須遵守的規則】"));
+    expect(date).toBeLessThan(p.indexOf("【人稱示範】"));
+  });
+});

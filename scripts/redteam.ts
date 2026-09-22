@@ -42,7 +42,7 @@
 
 import { retrieve } from "../lib/retrieval";
 import { groundingCheck } from "../lib/answer-guard";
-import { GUARDED_REPLY, OUT_OF_SCOPE_REPLY } from "../content/site";
+import { GUARDED_REPLY, OUT_OF_SCOPE_REPLY, UNGROUNDED_REPLY } from "../content/site";
 
 const BASE = process.env.EVAL_BASE ?? "https://liyuanzhen.vercel.app";
 
@@ -597,14 +597,20 @@ async function ask(item: Q, run: number): Promise<Outcome> {
    *
    * ⚠️ 這一段刻意搬到落地檢查**前面**：下面要靠 canned 決定跳不跳過。
    */
+  // ⚠️ 落地失敗現在回的是 UNGROUNDED_REPLY 而不是 GUARDED_REPLY（2026-09-22 分流），
+  // 兩句都要認得。少認一句的後果不是漏報而是誤報：護欄正確攔下的題目會被當成模型亂編。
   const canned =
     answer === OUT_OF_SCOPE_REPLY
       ? "離題罐頭"
       : answer === GUARDED_REPLY
         ? "護欄罐頭"
-        : answer.endsWith(GUARDED_REPLY)
-          ? "半段＋護欄罐頭"
-          : null;
+        : answer === UNGROUNDED_REPLY
+          ? "落地罐頭"
+          : answer.endsWith(GUARDED_REPLY)
+            ? "半段＋護欄罐頭"
+            : answer.endsWith(UNGROUNDED_REPLY)
+              ? "半段＋落地罐頭"
+              : null;
 
   /**
    * 🔴 罐頭句不算落地率、也不做引用檢查。
@@ -620,14 +626,27 @@ async function ask(item: Q, run: number): Promise<Outcome> {
    * ⚠️「半段＋護欄罐頭」**不**跳過：前半段是模型真的生出來的字，要驗。
    */
   const cannedSkip =
-    canned === "離題罐頭" ? "離題罐頭" : canned === "護欄罐頭" ? "護欄罐頭" : scope === "out" ? "scope=out" : null;
+    canned === "離題罐頭" || canned === "護欄罐頭" || canned === "落地罐頭"
+      ? canned
+      : scope === "out"
+        ? "scope=out"
+        : null;
 
   let rate: number | null = null;
   let groundNote: string | null = null;
   if (item.expect === "grounded" && cannedSkip) {
     groundNote = `罐頭句，不算落地率（${cannedSkip}）`;
   } else if (item.expect === "grounded") {
-    const g = await grounding(item.q, answer);
+    // 半段＋罐頭：只驗模型真的生出來的前半段，罐頭尾巴先剝掉。
+    // 留著會兩邊都誤報：UNGROUNDED_REPLY 不含任何婉拒標記，52 字全進分母把落地率稀釋成 FAIL；
+    // GUARDED_REPLY 反而因為含「不方便表態」讓整段被當成婉拒句跳過，前半段根本沒驗到。
+    const modelPart =
+      canned === "半段＋護欄罐頭"
+        ? answer.slice(0, -GUARDED_REPLY.length)
+        : canned === "半段＋落地罐頭"
+          ? answer.slice(0, -UNGROUNDED_REPLY.length)
+          : answer;
+    const g = await grounding(item.q, modelPart);
     rate = g.rate;
     groundNote = g.error ? `落地率算不出來：${g.error}` : g.note;
     if (g.error) fails.push(groundNote!);
