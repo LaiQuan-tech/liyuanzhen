@@ -12,6 +12,7 @@
     "build:titles": "tsx scripts/build-index.ts titles",
     "eval:retrieval": "tsx --env-file=.env.local scripts/eval-retrieval.ts",
     "eval:voice": "tsx --env-file=.env.local scripts/eval-voice.ts",
+    "eval:public": "tsx --env-file=.env.local scripts/eval-public.ts",
     "redteam": "tsx --env-file=.env.local scripts/redteam.ts",
     "smoke:chat": "tsx --env-file=.env.local scripts/smoke-chat.ts",
     "ingest:supabase": "tsx --env-file=.env.local scripts/ingest-supabase.ts",

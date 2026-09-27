@@ -76,12 +76,32 @@ export async function streamChatResponse(
   });
 
   let fullText = "";
+  // 只拿來診斷空白答案（見迴圈後面）。兩個都記「看到的最後一個值」而不只看最後一個 chunk：
+  // finishReason 通常只在最後一個 chunk，但 promptFeedback 依 SDK 說明只出現在第一個 chunk。
+  let finishReason: string | undefined;
+  let blockReason: string | undefined;
   for await (const chunk of stream) {
     const delta = chunk.text;
     if (delta) {
       fullText += delta;
       onTextDelta(delta);
     }
+    finishReason = chunk.candidates?.[0]?.finishReason ?? finishReason;
+    blockReason = chunk.promptFeedback?.blockReason ?? blockReason;
+  }
+
+  // 🔴 模型回了零個字。正式站實測：「妳是同性戀嗎」回 HTTP 200、內容是空字串，訪客看到一個
+  // 空白泡泡；後台近 30 天有 2 筆 answer_summary 是空字串，看起來跟正常回答一樣。
+  // 推測是安全過濾或 finishReason 異常——把原因印出來，下次發生才分得出是哪一種。
+  // 替代回覆與 failed 標記在 app/api/chat/route.ts；這裡的簽名與回傳值刻意不變。
+  // 🔴 只記問題的字數，不記內容：log 會留在 Vercel。原本印前 20 字，但短問題會整句進 log
+  // （「妳是同性戀嗎」就是）。要看是哪一題，用時間去後台 interactions 對。
+  if (!fullText.trim()) {
+    console.warn("[chat] 模型回了空白答案", {
+      finishReason: finishReason ?? null,
+      blockReason: blockReason ?? null,
+      questionChars: Array.from(question).length,
+    });
   }
   return fullText;
 }

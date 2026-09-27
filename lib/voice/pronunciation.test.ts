@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { fixPronunciation, PRONUNCIATION_FIXES } from "./pronunciation";
+import { CRISIS_SELF_HARM_REPLY, CRISIS_VIOLENCE_REPLY } from "@/content/site";
 
 describe("fixPronunciation", () => {
   it("把「婦」換成同音的四聲字", () => {
@@ -46,6 +47,38 @@ describe("fixPronunciation", () => {
       for (const s of sources) {
         expect(to.includes(s)).toBe(false);
       }
+    }
+  });
+
+  /**
+   * 求助危機回覆（content/site.ts）裡的專線號碼要逐字唸，不可以唸成「一百一十三」。
+   *
+   * 🔴 表裡換的是確切片語（「打 110」「113 保護專線」…）。那兩句哪天改了號碼旁邊的字，
+   * 片語就對不上、號碼會原封不動送進合成——這一條就是為了在那時候變紅。
+   * 「24 小時」是時長，本來就該唸成「二十四小時」，不在替換之列，比對前先拿掉。
+   */
+  it("求助危機回覆換完之後，除了「24 小時」不剩任何阿拉伯數字", () => {
+    for (const line of [CRISIS_SELF_HARM_REPLY, CRISIS_VIOLENCE_REPLY]) {
+      const spoken = fixPronunciation(line);
+      expect(spoken, line).toContain("24 小時");
+      expect(spoken.replaceAll("24 小時", ""), line).not.toMatch(/\d/);
+    }
+  });
+
+  it("求助專線換成逐字唸法", () => {
+    const selfHarm = fixPronunciation(CRISIS_SELF_HARM_REPLY);
+    expect(selfHarm).toContain("一九二五安心專線");
+    expect(selfHarm).toContain("一九九五生命線");
+    expect(selfHarm).toContain("打一一九");
+    const violence = fixPronunciation(CRISIS_VIOLENCE_REPLY);
+    expect(violence).toContain("打一一零");
+    expect(violence).toContain("一一三保護專線");
+  });
+
+  /** 🔴 只換確切片語、不換裸數字：民國年與西元年在一般回答裡到處都是 */
+  it("民國年與西元年不受影響", () => {
+    for (const s of ["民國 110 年", "民國 113 年", "1995 年", "1925 年", "1995年"]) {
+      expect(fixPronunciation(s)).toBe(s);
     }
   });
 });

@@ -41,7 +41,8 @@
  */
 
 import { retrieve } from "../lib/retrieval";
-import { groundingCheck } from "../lib/answer-guard";
+// ⚠️ 門檻直接 import，不再抄一份：抄的那份停在 0.12，報告印的門檻跟實際在用的 0.06 對不上。
+import { GROUNDING_FLOOR, groundingCheck } from "../lib/answer-guard";
 import { GUARDED_REPLY, OUT_OF_SCOPE_REPLY, UNGROUNDED_REPLY } from "../content/site";
 
 const BASE = process.env.EVAL_BASE ?? "https://liyuanzhen.vercel.app";
@@ -55,8 +56,6 @@ const pace = () => new Promise((r) => setTimeout(r, PACE_MS));
 
 const RUNS = Math.max(1, Number(process.env.REDTEAM_RUNS ?? 1) || 1);
 
-/** 跟 lib/answer-guard.ts 的 GROUNDING_FLOOR 對齊。改一邊要改兩邊。 */
-const GROUNDING_FLOOR = 0.12;
 
 /**
  * 婉拒標記。refuse 組不只要求「沒有洩漏」，還要求她真的說了不。

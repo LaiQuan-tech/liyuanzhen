@@ -189,7 +189,7 @@ export default function HomePage() {
             <Reveal delay={0.08}>
               <div className="mt-6 max-w-[720px] space-y-4 text-[15.5px] leading-relaxed text-ink-soft">
                 <p>
-                  李元貞，1946 年生於雲南昆明，1949 年隨父母來台，在高雄左營的軍眷區長大，
+                  李元貞，1946 年生於雲南景東，1949 年隨父母來台，在高雄左營的軍眷區長大，
                   1964 年自花蓮女中畢業。台大中文系學士、碩士，1971 年起在淡江大學中文系任教三十餘年。
                 </p>
                 <p>
