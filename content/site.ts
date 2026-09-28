@@ -71,7 +71,9 @@ export const OUT_OF_SCOPE_REPLY =
  *
  * 🔴 只用在 lib/answer-guard.ts 的封鎖清單命中（政治表態、以本人身分做新承諾，
  * checkAnswer/BLOCKED_PATTERNS 那一層）。落地檢查失敗（落地率不足、未落地引用）
- * 要用下面的 UNGROUNDED_REPLY，不是這句。
+ * 要用下面的 UNGROUNDED_REPLY，不是這句；在世家人隱私與老師近況（PRIVACY_PATTERNS）用 PRIVACY_REPLY；
+ * 推理外洩（LEAK_PATTERNS，第十五輪分出來）是模型故障，用 FALLBACK_REPLY 並記 failed。
+ * 危機延續中（上一句是危機回覆）這幾種攔截一律改送同一句危機回覆（第十五輪起含這一句）。
  *
  * 這兩類攔截原因不同，答非所問會很明顯：正式站實測過兩次落地失敗被錯配到這句——
  * 訪客問「你確定沒寫？？」，模型原答「自傳裡有寫到家庭與妹妹元晶，但…確實沒有列出
@@ -104,6 +106,30 @@ export const GUARDED_REPLY =
  */
 export const UNGROUNDED_REPLY =
   "這一題我答不上來——資料裡找不到可靠的出處，我不亂講。你可以問得更具體一點，或者翻翻《我來了！臺灣婦女改變了》。";
+
+/**
+ * 輸出護欄攔下在世家人隱私與老師近況時的替代回答（lib/answer-guard.ts 的 PRIVACY_PATTERNS，kind "privacy"：
+ * 女兒的信仰、健康與收租，南港國宅，現在跟元晶同住、照顧起居，記憶退化、失智、輪椅）。
+ * 第十三輪起那組樣式只留高精確度的，敏感段落改在語料層排除——這句是最後一道的替代回覆。
+ *
+ * 🔴 2026-09-28 第十輪：原本跟政治表態共用 GUARDED_REPLY——「我覺得妳好可憐 一個人都沒人照顧」
+ * 「妳女兒信什麼教」拿到「這部分我不方便表態」，答非所問，還像在迴避。
+ * ⚠️ 第一人稱、無 Markdown、60 字以內（會被 TTS 唸出來、也會當字幕），不含任何語料外的事實：
+ * 只說 AI 分身沒辦法代替老師和家人說明現在的生活——跟 persona-prompt 規則 5 要她講的一致（文字照協調者定稿）。
+ * ⚠️ components/chat/ChatPanel.tsx、components/live/LiveStage.tsx 的 speakableAnswer 串接要認得這句：
+ * 半段＋這句時只唸這句，被攔下的前半段不可以用她的聲音唸出去。
+ */
+export const PRIVACY_REPLY =
+  "謝謝你的關心。老師本人和家人現在的生活，我是 AI 分身，沒辦法代替她們說明；想聊她的婦運路、她寫的書，都可以問我。";
+
+/**
+ * 生成失敗（Gemini 丟例外：API 錯誤、MAX_TOKENS 或其他非 STOP 的半途結束、24 秒生成逾時）時的替代回答；
+ * 第十五輪起推理外洩（answer-guard 的 kind "leak"）也用這句——那是模型故障，不是表態。原本寫在 app/api/chat/route.ts 裡；
+ * 第十一輪搬到這裡，因為 ChatPanel、LiveStage 的 speakableAnswer 串接也要認得它——
+ * 串流中途失敗時前半段已經送出，照整段唸就會把半段加「抱歉…」一起唸出來。
+ * （route.ts 只能匯出路由用的欄位，不能從那裡 import。）
+ */
+export const FALLBACK_REPLY = "抱歉，我這邊出了點狀況，請稍後再試一次。";
 
 /**
  * 求助危機的固定回覆（不呼叫 LLM，直接回這段）。訪客這一句被 lib/crisis.ts 的
@@ -144,6 +170,26 @@ export const CRISIS_VIOLENCE_REPLY =
   "謝謝你願意說出來，這不是你的錯。如果你現在有危險，請馬上打 110 報警。家暴、性侵害、性騷擾都可以打 113 保護專線，24 小時都有人接，會陪你想下一步怎麼做。";
 
 /**
+ * app/api/chat/route.ts 會「接在已經送出的半段後面」的固定回覆：護欄攔下（GUARDED／PRIVACY）、落地失敗（UNGROUNDED）、
+ * 生成失敗與推理外洩（FALLBACK），以及危機延續與專線救援（兩句危機回覆）。模型超過 140 字緩衝時前半段已經送出，
+ * 攔下或失敗之後 route 才把這幾句接在後面。
+ *
+ * 🔴 components/chat/ChatPanel.tsx 與 components/live/LiveStage.tsx 用這張表逐一跑 speakableAnswer：
+ * 結尾是其中一句，就只唸那一句——被攔下或失敗的前半段不可以用她的臉和聲音唸出去（理由見 lib/avatar/types.ts）。
+ * 第十輪加 PRIVACY_REPLY、第十一輪加 FALLBACK_REPLY（「半段＋抱歉，我這邊出了點狀況」會被整段唸出來）。
+ * 兩句危機回覆是同一個洞：延續中被落地檢查攔下、專線救援，也是接在半段後面。
+ * ⚠️ route 新增會接在半段後面的句子時，要加進這張表。
+ */
+export const TAIL_REPLIES: readonly string[] = [
+  GUARDED_REPLY,
+  UNGROUNDED_REPLY,
+  PRIVACY_REPLY,
+  FALLBACK_REPLY,
+  CRISIS_SELF_HARM_REPLY,
+  CRISIS_VIOLENCE_REPLY,
+];
+
+/**
  * 寒暄的固定回覆（不呼叫 LLM、不檢索，直接回這段）。訪客整句只是招呼、感謝、道別或應答時，
  * lib/smalltalk.ts 的 detectSmalltalk 命中，app/api/chat/route.ts 在檢索之前就回其中一句：
  * 招呼（你好、哈囉、你食飽未…）→ SMALLTALK_GREETING_REPLY；
@@ -169,6 +215,22 @@ export const SMALLTALK_THANKS_REPLY = "不客氣，還想知道什麼都可以�
 export const SMALLTALK_FAREWELL_REPLY = "謝謝你來聊天，再見。";
 
 /**
+ * 讚美的固定回覆（lib/smalltalk.ts 的 praise：「妳好厲害喔 我好崇拜妳」「妳好棒」「妳是我的偶像」
+ * 「謝謝妳為女性做的一切」「老師辛苦了」這類整句都是讚美的話）。
+ *
+ * 🔴 2026-09-28 第十輪：模型原本答得很得體（「謝謝你的鼓勵…當年的婦運，是許多夥伴一起堅持與努力」），
+ * 卻被落地檢查換成「這一題我答不上來」——讚美本來就沒有東西可以落地。
+ * ⚠️ 「婦運是許多人一起走出來的路，不是我一個人的功勞」有語料出處，不是站方替她新加的主張：
+ * 03-movement-timeline.md:25「婦女新知從來不是一個人的事業」、:29「強調婦運是集體的成果」；
+ * 04-thought.md:52–55（HEAD 的 40–43）與 05-works.md:27–29「台灣婦女運動不是靠某一個人完成的，
+ * 而是無數女性一起累積、一起推動的成果」。改寫時不可以加上語料外的事實（稱號、人名、年份）——
+ * 「臺灣婦運之母」是葉菊蘭給她的稱號（05:308），自己講出來就是自誇。
+ * ⚠️ 第一人稱、無 Markdown、60 字以內。
+ */
+export const SMALLTALK_PRAISE_REPLY =
+  "謝謝你。婦運是許多人一起走出來的路，不是我一個人的功勞。想聽哪一段故事，都可以問我。";
+
+/**
  * 私人資訊與髒話請求的固定回覆（不呼叫 LLM、不檢索，直接回這段）。lib/refusal-request.ts 的
  * detectRefusalRequest 命中時，app/api/chat/route.ts 在檢索之前回其中一句：
  * 要她或她家人的電話、LINE、地址，問她家人的名字與行蹤 → REFUSAL_PRIVACY_REPLY；
@@ -187,6 +249,34 @@ export const REFUSAL_PRIVACY_REPLY =
   "我是 AI 分身，沒有個人的電話、LINE 或地址，也不替老師和她的家人提供私人資訊。想聊她的婦運路、她寫的書，都可以問我。";
 
 export const REFUSAL_PROFANITY_REPLY = "我不說髒話。想聊她的婦運路、她寫的書或人生故事，都可以問我。";
+
+/**
+ * 騷擾式提問的固定回覆：對她的身體、衣著、性、親密關係的提問（lib/refusal-request.ts 的 harassment）。
+ *
+ * 🔴 為什麼要有：「妳穿什麼顏色的內衣」被判離題，回了 OUT_OF_SCOPE_REPLY（「這我就答不上來了…
+ * 你想問什麼都可以：1982 年為什麼辦《婦女新知》…」）——對性騷擾回離題罐頭等於沒拒絕，還像在邀請繼續問。
+ * ⚠️ 語氣要明確但不羞辱人：說清楚不回答，然後把話帶回她的婦運與書。第一人稱、無 Markdown、60 字以內，
+ * 不含任何語料外的事實。
+ */
+export const REFUSAL_HARASSMENT_REPLY = "這樣的問題不太合適，我就不回答了。想聊她的婦運路、她寫的書，都可以問我。";
+
+/**
+ * 醫療、理財、代勞、用她的名義創作的固定回覆（lib/refusal-request.ts 的 medical／finance／errand／creation）。
+ *
+ * 🔴 為什麼要有：四組獨立查核給得體分，這幾類原本靠離題罐頭或模型臨場——「我頭痛該吃什麼藥」回離題罐頭、
+ * 一句關心都沒有；Z-10 照做了翻譯；T-03 把女兒的往事拿來當母親節卡片的素材；U-05 拼出假引文當標題。
+ * ⚠️ 四句都是第一人稱或中性、無 Markdown、60 字以內，不含任何語料外的事實：
+ * 醫療那句只叫人去看醫師或藥師，**不要**加任何病名、藥名或專線；理財那句不推薦任何機構。
+ * ⚠️ 創作那句的「我可以念給你聽」是真的：念她寫過的詩走原路徑（語料有全文，要逐字）。
+ */
+export const REFUSAL_MEDICAL_REPLY =
+  "身體不舒服要請醫師或藥師看看，我沒辦法給醫療建議。想聊她的婦運路、她寫的書，都可以問我。";
+
+export const REFUSAL_FINANCE_REPLY = "投資理財要問專業的人，我沒辦法給這類建議。想聊她的婦運路、她寫的書，都可以問我。";
+
+export const REFUSAL_ERRAND_REPLY = "這個我幫不上忙，我只能介紹她的生平、婦運路和她寫的書，這些都可以問我。";
+
+export const REFUSAL_CREATION_REPLY = "我沒辦法用老師的名義寫新的作品。想聽她寫過的詩，我可以念給你聽。";
 
 /**
  * 只列已完成的頁面——導覽列連到 404 在客戶面前是最沒必要的失分。

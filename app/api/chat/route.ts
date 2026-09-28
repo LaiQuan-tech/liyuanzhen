@@ -9,13 +9,21 @@ import {
   OUT_OF_SCOPE_REPLY,
   GUARDED_REPLY,
   UNGROUNDED_REPLY,
+  PRIVACY_REPLY,
+  FALLBACK_REPLY,
   CRISIS_SELF_HARM_REPLY,
   CRISIS_VIOLENCE_REPLY,
   SMALLTALK_GREETING_REPLY,
   SMALLTALK_THANKS_REPLY,
   SMALLTALK_FAREWELL_REPLY,
+  SMALLTALK_PRAISE_REPLY,
   REFUSAL_PRIVACY_REPLY,
   REFUSAL_PROFANITY_REPLY,
+  REFUSAL_HARASSMENT_REPLY,
+  REFUSAL_MEDICAL_REPLY,
+  REFUSAL_FINANCE_REPLY,
+  REFUSAL_ERRAND_REPLY,
+  REFUSAL_CREATION_REPLY,
 } from "@/content/site";
 import type { HistoryTurn } from "@/lib/query-expansion";
 import { detectCrisis, hotlineKind, type CrisisKind } from "@/lib/crisis";
@@ -52,8 +60,6 @@ export async function GET() {
 const MAX_MESSAGE_CHARS = 300;
 const MAX_MESSAGES = 13; // 6 輪來回 + 這次的提問
 
-const FALLBACK_REPLY = "抱歉，我這邊出了點狀況，請稍後再試一次。";
-
 function textResponse(body: string, status = 200) {
   return new Response(body, {
     status,
@@ -83,11 +89,17 @@ const SMALLTALK_REPLY: Record<SmalltalkKind, string> = {
   thanks: SMALLTALK_THANKS_REPLY,
   ack: SMALLTALK_THANKS_REPLY,
   farewell: SMALLTALK_FAREWELL_REPLY,
+  praise: SMALLTALK_PRAISE_REPLY,
 };
 
 const REFUSAL_REPLY: Record<RefusalKind, string> = {
   privacy: REFUSAL_PRIVACY_REPLY,
   profanity: REFUSAL_PROFANITY_REPLY,
+  harassment: REFUSAL_HARASSMENT_REPLY,
+  medical: REFUSAL_MEDICAL_REPLY,
+  finance: REFUSAL_FINANCE_REPLY,
+  errand: REFUSAL_ERRAND_REPLY,
+  creation: REFUSAL_CREATION_REPLY,
 };
 
 /**
@@ -252,7 +264,8 @@ export async function POST(request: NextRequest) {
   // 🔴 延續：上一個 model 回合是危機回覆時，這一句多半是接著危機在說話——
   // 「打了沒人接」「可是我不敢打電話」「我現在在頂樓了」「我好痛苦」。這些句子單獨看不是危機
   // （detectCrisis 不會中），交給 RAG 會拿到離題罐頭或「這一題我答不上來」。
-  // 所以這一句如果被判離題、被落地檢查攔下、模型回空白或生成失敗，就再送一次**同一句**危機回覆；
+  // 所以這一句如果被判離題、被輸出護欄攔下（任何一種，第十五輪起含封鎖清單與推理外洩）、模型回空白或生成失敗，
+  // 就再送一次**同一句**危機回覆；
   // 在範圍內、模型也正常回答的提問照常回答（例如接著問婦女新知）。
   // 寒暄路徑在延續時也不接手：危機對話裡的「好」「嗯」不能被回一句「不客氣」。
   const continuing = crisisReplyInHistory(history);
@@ -260,6 +273,8 @@ export async function POST(request: NextRequest) {
   // 私人資訊與髒話請求（判準見 lib/refusal-request.ts）：要她或她家人的電話、LINE、地址，問她家人的名字
   // 與行蹤，或叫她罵髒話——直接回固定的拒絕，不檢索、不呼叫 LLM。最終建置重跑剩下的 3 題失敗就是這一類：
   // 模型其實都正確拒絕了，但措辭每次不同，落地檢查常把拒絕換成「這一題我答不上來」，答非所問。
+  // 對她的身體、衣著、性、親密關係的騷擾式提問也走這裡（「妳穿什麼顏色的內衣」原本被判離題、回了離題罐頭，
+  // 等於沒拒絕，還像在邀請繼續問）。
   // 記錄照寒暄的寫法；回應標頭 X-Retrieval-Scope: refusal。
   // ⚠️ 順序：危機判斷與危機延續在前——「我被打了 可以給我妳的電話嗎」要回危機回覆，上一句是危機回覆時也不接手。
   // 排在寒暄之前，但兩者互斥、先後不影響結果：寒暄要「整句」就是招呼語，這裡要的是帶著內容的請求。
@@ -416,13 +431,28 @@ export async function POST(request: NextRequest) {
           controller.enqueue(encoder.encode(answer));
         } else if (finished.blocked || blocked) {
           blocked = true;
-          // kind 分辨兩種攔截原因：pattern＝封鎖清單命中（政治表態／新承諾），
-          // grounding＝落地率不足或未落地引用。分不出來（理論上不會發生，
-          // 只是防呆）時退回 GUARDED_REPLY。見 content/site.ts 兩句上方的註解。
-          // 延續中被落地檢查攔下 → 同一句危機回覆，不是「這一題我答不上來」。
-          // 封鎖清單（pattern）照舊：那是政治表態／新承諾，跟危機無關。
+          // kind 分辨四種攔截原因：pattern＝封鎖清單命中（政治表態／新承諾／新書資訊），
+          // leak＝推理外洩（第十五輪從封鎖清單分出來），privacy＝在世家人隱私與老師近況（第十輪分出來），
+          // grounding＝落地率不足或未落地引用。分不出來（理論上不會發生，只是防呆）時退回 GUARDED_REPLY。
+          // 見 content/site.ts 那幾句上方的註解。
+          // 🔴 延續中（上一句是危機回覆）不管哪一種攔截，一律送同一句危機回覆。
+          // 第十五輪（獨立審查）：原本只有落地檢查與隱私接延續，pattern 照舊送 GUARDED_REPLY——訪客剛說完不想活、
+          // 接著說「可是我不知道要跟誰說」，模型的安慰句含「我保證你不是一個人」被封鎖清單攔下，
+          // 訪客收到「這部分我不方便表態…要不要換個方向試試？」，延續就斷了。對正在求助的人，專線比任何罐頭句都重要。
+          // （第十四輪：「我媽失智了 我一個人照顧她」回老師家人的隱私說明也是同一種答非所問。）
+          // 🔴 leak＝模型的推理漏進輸出（英文推理、數字數、草稿標記），是模型故障不是表態：
+          // 送 FALLBACK_REPLY（跟生成失敗同一句），而且記 failed，後台才看得到——原本跟政治共用「這部分我不方便表態」，
+          // 回給「你爸媽是做什麼的」答非所問，也被記成一個正常的攔截。answerSummary 照其他攔截存原答（後台要看得到漏了什麼）。
           const reply =
-            finished.kind === "grounding" ? continuing ?? UNGROUNDED_REPLY : GUARDED_REPLY;
+            continuing ??
+            (finished.kind === "grounding"
+              ? UNGROUNDED_REPLY
+              : finished.kind === "privacy"
+                ? PRIVACY_REPLY
+                : finished.kind === "leak"
+                  ? FALLBACK_REPLY
+                  : GUARDED_REPLY);
+          if (finished.kind === "leak") failed = true;
           controller.enqueue(encoder.encode(reply));
         } else if (!finished.text.trim()) {
           // 🔴 模型回了零個字（原因由 lib/gemini-chat.ts 印成 warn：finishReason／blockReason）。

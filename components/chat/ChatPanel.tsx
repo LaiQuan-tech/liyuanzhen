@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import AvatarStage, { type AvatarStageHandle } from "@/components/avatar/AvatarStage";
 import { deriveAvatarState, speakableAnswer } from "@/lib/avatar";
-import { ANSWER_DISCLAIMER, GUARDED_REPLY, UNGROUNDED_REPLY } from "@/content/site";
+import { ANSWER_DISCLAIMER, TAIL_REPLIES } from "@/content/site";
 import { OPENING_QUESTIONS } from "@/content/suggested-questions";
 
 interface Message {
@@ -95,15 +95,12 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
         // ⚠️ 一定要送 speakableAnswer 而不是 answer：answer-guard 命中封鎖清單時
         //    會停止輸出剩餘文字、在後面追加婉拒句。照著整段唸就會把系統認定
         //    不該說的那段用她的臉和聲音講出去。
-        //    現在有兩種婉拒句（封鎖清單命中 GUARDED_REPLY、落地失敗 UNGROUNDED_REPLY，
-        //    見 app/api/chat/route.ts 的 kind 分流），兩種都要檢查有沒有回收——
-        //    只認 GUARDED_REPLY 的話，落地失敗又超過 140 字緩衝而先吐出半段的情境，
-        //    那半段就會漏網被唸出去。
+        //    route 會接在半段後面的句子不只一種（封鎖清單 GUARDED_REPLY、隱私 PRIVACY_REPLY、
+        //    落地失敗 UNGROUNDED_REPLY、生成失敗 FALLBACK_REPLY、危機延續與專線救援），
+        //    全部列在 content/site.ts 的 TAIL_REPLIES，每一種都要檢查有沒有回收——
+        //    少認一種，那種情境下超過 140 字緩衝而先吐出的半段就會漏網被唸出去。
         if (voiceOn) {
-          const toSpeak = speakableAnswer(
-            speakableAnswer(answer, GUARDED_REPLY),
-            UNGROUNDED_REPLY
-          );
+          const toSpeak = TAIL_REPLIES.reduce((text, reply) => speakableAnswer(text, reply), answer);
           stageRef.current?.finish(toSpeak);
         }
       } catch {

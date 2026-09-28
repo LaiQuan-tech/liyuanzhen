@@ -20,7 +20,7 @@
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { createHash } from "node:crypto";
-import { chunkMarkdown } from "./chunk-text";
+import { chunkMarkdown, stripExcluded } from "./chunk-text";
 import { embedTexts, EMBEDDING_MODEL, EMBEDDING_DIM } from "../lib/embeddings";
 
 const KNOWLEDGE_DIR = join(process.cwd(), "content", "knowledge");
@@ -50,7 +50,8 @@ function knowledgeFiles(): string[] {
 export function collectTitles(): string[] {
   const seen = new Set<string>();
   for (const file of knowledgeFiles()) {
-    const raw = readFileSync(join(KNOWLEDGE_DIR, file), "utf-8");
+    // ai:exclude 排除區裡的標題不收：那些段落不進 AI，它們的篇名也不該被當成「語料裡有的」
+    const raw = stripExcluded(readFileSync(join(KNOWLEDGE_DIR, file), "utf-8"), file).text;
     const re = /《([^》\n]{0,60})》|〈([^〉\n]{0,60})〉/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(raw)) !== null) {
@@ -92,12 +93,17 @@ async function buildIndex() {
   for (const file of files) {
     const raw = readFileSync(join(KNOWLEDGE_DIR, file), "utf-8");
     hash.update(raw);
-    const chunks = chunkMarkdown(raw, {
-      source: basename(file, ".md"),
-      sourceUrl: "",
-      docTitle: basename(file, ".md"),
-    });
-    console.log(`  ${file} → ${chunks.length} 塊`);
+    // ⚠️ 標記不成對會在這裡丟錯（檔名:行號），整支失敗——而且是在呼叫 embedding API 之前
+    const chunks = chunkMarkdown(
+      raw,
+      { source: basename(file, ".md"), sourceUrl: "", docTitle: basename(file, ".md") },
+      { fileName: file }
+    );
+    const { excluded } = stripExcluded(raw, file);
+    const note = excluded.length
+      ? `（ai:exclude 排除 ${excluded.length} 段、${excluded.reduce((s, r) => s + r.chars, 0)} 字）`
+      : "";
+    console.log(`  ${file} → ${chunks.length} 塊${note}`);
     allChunks.push(...chunks);
   }
 

@@ -96,6 +96,99 @@ const TRAILING_PARTICLES = /[嗎呢吧啊呀喔哦了]+$/;
 const FOLLOW_UP_REMAINDER_MAX_CHARS = 3;
 
 /**
+ * 停頓（子句邊界）：空白與標點。規則 d 與口語清理都靠它判斷「在句首」「自成一段」。
+ * 語音辨識多半用空白斷句（「妳剛剛講太快了 我聽不清楚 妳再講一次妳是哪裡人」），打字則多半是標點。
+ * ⚠️ 用到它的正規式一律寫成 new RegExp(字串)：lookbehind 寫成字面值會被 TypeScript 依 target 檢查。
+ */
+const PAUSE = "\\s?？!！。，,、~～：:；;…";
+const CLAUSE_START = `(?:^|(?<=[${PAUSE}]))`;
+const CLAUSE_END = `(?=[${PAUSE}]|$)`;
+
+/** 算「整句去標點後」的字數用：所有空白、標點與引號括號 */
+const ALL_PUNCTUATION = /[\s?？!！。，,、~～：:；;…「」『』（）()《》〈〉"'“”‘’]/g;
+
+/**
+ * 規則 d（質疑／更正，2026-09-28）的字數上限，以「整句去標點後」計。
+ * 查核附和讓步的根因在檢索：「明明是2005年出的 妳搞錯了吧」「不是吧 我記得是2000年以後才修的」
+ * 「妳是台大老師吧 妳記錯了」太長、也不是既有頭詞，needsContext 一律 false，只拿質疑句本身去檢索，
+ * 撈到的是網站說明〈它會答錯嗎〉——數位人就照那段撤回原本正確的答案；撈得到原本出處的題目都守住了。
+ * Q 組最長的質疑句 16 字（「不對 妳是昆明人啦 維基百科都這樣寫」），30 字留足空間，
+ * 又把一口氣問好幾件事的長句擋在外面。
+ */
+const CHALLENGE_MAX_CHARS = 30;
+
+/**
+ * 規則 d 的質疑／更正句型（2026-09-28，經兩輪獨立審查收窄）。
+ *
+ * 🔴 原則：寧可漏判，不可誤判。漏判只是退回原句檢索（9/22 驗過安全）；誤判會把完整的新問題黏上前一題，
+ * 9/22 修掉的污染就回來了——主查詢 ≥ 0.62 就採用，不會退回原句。
+ *
+ * 誤判過的實例（全部進了測試當反例）：
+ *   第一輪審查：「妳覺得為什麼女人明明有能力卻升不上去」「為什麼女人明明是受害者還被責怪」「女人應該怎麼做才對」
+ *   「我應該怎麼跟女兒溝通才對」「年輕人說錯話了怎麼辦」「政府當年到底哪裡搞錯了」「妳覺得傳統觀念都錯了嗎」
+ *   「這個不對等的社會要怎麼改變」；findAnchor 還因此把「妳覺得女人應該怎麼做才對」當追問跳過，
+ *   下一句「那後來呢？」找不到錨點。
+ *   第二輪審查：「明明妳是教授 為什麼還被警總約談」「女人明明做一樣的工作 你們當年怎麼爭取同工同酬」
+ *   「當年離婚 妳覺得妳錯了嗎」「妳明明寫過很多詩 為什麼說自己不是詩人」「明明是三十歲才結婚 為什麼被說晚婚」。
+ *
+ * 所以：
+ *   - 帶「為什麼／怎麼／哪／什麼／誰／幾…」的句子一律不算（NEW_QUESTION）：質疑句本身不會再問新問題。
+ *   - 每一條都要有「對方」或「對方剛說的話」在場：
+ *     1. 妳／你／您＋（剛剛／剛才／是不是／會不會／應該(是)／一定(是)／可能）＋搞錯／記錯／說錯／講錯／弄錯，
+ *        錯後面（最多隔 2 字）接 了／吧／啦／囉／喔／嗎：「妳記錯了吧」（Q-01）「妳剛剛說錯了」（Q-03）「妳搞錯了吧」（Q-06）。
+ *        （第十五輪起整句帶「嗎／呢」就不算質疑，這裡的「嗎」實際上不會再通過，見 ASKS_SOMETHING_NEW。）
+ *        「剛剛」非收不可：Q-03 就是這個句型。沒有「妳」的「會不會說錯」是泛問 AI 可不可靠（eval K-04）。
+ *     2. 句首的「不對」「錯了」「不是這樣」後面接標點、空白或語氣詞（「不對 妳是昆明人啦」Q-02）；
+ *        句首的「不是吧」「不是啦」（Q-05）。句中的不對／錯了不收（「這個不對等」「都錯了嗎」），
+ *        光「不是，」也不收（可能是「不是，我想問另一件事」）。
+ *     3. 妳／你／您（剛剛）（說的／講的）（都）錯了、妳（剛剛）說的／講的不對：「妳錯了」「妳說的不對」。
+ *     第 1、3 條的主詞前面（同一句裡）有「覺得／認為／會不會／是不是」就不算：
+ *     「當年離婚 妳覺得妳錯了嗎」是在問她的看法。
+ *     4. 明明是＋阿拉伯數字年份（19xx、20xx）：「明明是1985年」（Q-01）「明明是2005年出的」（Q-06）。
+ *     5. 是＋阿拉伯數字年份…才對：「應該是1985年才對」；「女人應該怎麼做才對」這種規範句不收。
+ *     6. 我記得是／我記得明明：拿自己的記憶反駁（「不是吧 我記得是2000年以後才修的」Q-05）。
+ *   - 刻意漏判（測試裡的 ACCEPTED_MISSES）：「書裡明明有寫」（「法律明明有寫男女平等…」長得一樣）、
+ *     「明明是昆明 妳幹嘛說景東」「妳明明說過是1982年」（「明明…妳」「妳明明說」兩條整條拿掉）、
+ *     「明明是一九八五年」（中文數字）、「我覺得妳剛剛講的不對」（前面有覺得）、「不對 那是哪一年」（帶疑問詞）。
+ */
+const NEW_QUESTION = /為什麼|為何|幹嘛|怎麼|怎樣|如何|什麼|甚麼|哪|誰|幾|多少/;
+const YEAR = "(?:19|20|１９|２０)[0-9０-９]{2}";
+const PARTICLE = "[吧啦喔哦啊呀耶欸嘛囉嗎呢]";
+/** 放在主詞前面：同一句裡主詞之前出現過「覺得／認為／會不會／是不是」就不算（在問看法、在推測） */
+const NOT_AFTER_OPINION = "(?<!(?:覺得|認為|會不會|是不是)[^。？！?!]*)";
+const CHALLENGE_PATTERNS: readonly RegExp[] = [
+  new RegExp(
+    `${NOT_AFTER_OPINION}[妳你您](?:剛剛|剛才|是不是|會不會|應該是?|一定是?|可能){0,2}(?:搞|記|說|講|弄)錯(?:[^${PAUSE}]{0,2}?)(?:了|吧|啦|囉|喔|嗎)`
+  ),
+  new RegExp(`${CLAUSE_START}(?:不對|錯了|不是這樣)(?=[${PAUSE}]|$|${PARTICLE}|不對)`),
+  new RegExp(`${CLAUSE_START}不是(?:吧|啦)(?!台)`),
+  new RegExp(`${NOT_AFTER_OPINION}[妳你您](?:剛剛|剛才)?(?:(?:說|講)的)?(?:都|全)?錯了`),
+  new RegExp(`${NOT_AFTER_OPINION}[妳你您](?:剛剛|剛才)?(?:說|講)的不對`),
+  new RegExp(`明明(?:就)?是\\s*${YEAR}`),
+  new RegExp(`是\\s*${YEAR}[^。？！?!]{0,12}?才對(?!得)`),
+  /我記得(?:是|明明)/,
+];
+
+/**
+ * 規則 d 的另一道排除（第十五輪，複審實跑）：句子裡帶著新的請求（多說、說說、介紹、講講、告訴我、想問、想知道）
+ * 或問句語氣（嗎、呢；其他疑問詞照 NEW_QUESTION）時，不算質疑。
+ * 🔴 誤判的實例：「我記得是1987年的華西街遊行 妳可以多說一點嗎」「不對 我想問婦女新知」
+ * 「我記得是妳寫的〈花蓮的女兒〉 可以念給我聽嗎」——在 9/28 以前都是 false，規則 d 加進來之後變 true，
+ * 新的主題被黏到上一題。質疑句本身不會再提新的請求或問題。
+ * ⚠️ 代價：「妳記錯了嗎」這種用嗎收尾的質疑也漏判（退回原句檢索，寧可漏判）。
+ * ⚠️ 這一道看的是**原句**（見 followUpVerdict）：cleanSpokenQuery 會拿掉「我想問」「可以告訴我」這種請託外殼，
+ * 「不對 我想問婦女新知」清完是「不對 婦女新知」，只看清過的句子就又變成質疑了。
+ */
+const ASKS_SOMETHING_NEW = /多說|多講|說說|講講|介紹|告訴我|想問|想知道|嗎|呢/;
+
+/** 規則 d：字數在上限內、沒有新問題的疑問詞、而且命中任一條質疑句型（新請求與問句語氣的排除在 followUpVerdict） */
+function isChallenge(core: string): boolean {
+  if (charCount(core.replace(ALL_PUNCTUATION, "")) > CHALLENGE_MAX_CHARS) return false;
+  if (NEW_QUESTION.test(core)) return false;
+  return CHALLENGE_PATTERNS.some((pattern) => pattern.test(core));
+}
+
+/**
  * 錨點最多往回看幾個 user turn（含被跳過的追問）。
  * 追問幾乎都緊接在原問題後面，3 個已涵蓋「原問題 → 追問 → 再追問」；
  * 看得更遠正是舊版的病因——跨過好幾題抓到不相干的舊主題。
@@ -124,9 +217,21 @@ function followUpRemainder(core: string): string | null {
  *   b. ≤ 3 字、且不是以 你/妳/我 開頭（為什麼、然後、繼續、真的嗎、還有嗎）
  *   c. ≤ 10 字、符合 FOLLOW_UP_HEAD，且去掉前綴＋頭詞＋句尾語氣詞後剩 ≤ 3 字
  *      （你確定沒寫→「沒寫」✓、那你不能算一下嗎→「算一下」✓、為什麼要創辦婦女新知→「要創辦婦女新知」✗）
+ *   d. 整句去標點後 ≤ 30 字、不帶新問題的疑問詞、且有指向對方剛說的話的質疑／更正（isChallenge：
+ *      妳記錯了吧、句首的「不對」「不是吧」、妳錯了、明明是2005年、是1985年才對、我記得是…）——
+ *      錨點照舊是緊鄰的上一題，檢索才撈得回原本答案的出處。寧可漏判，不可誤判。
+ *      句子裡帶著新的請求或問句語氣（ASKS_SOMETHING_NEW：多說、介紹、想問、嗎、呢…）時不算（第十五輪）。
  */
 export function needsContext(message: string): boolean {
-  const core = message.trim().replace(TRAILING_PUNCTUATION, "").trim();
+  return followUpVerdict(message, message);
+}
+
+/**
+ * needsContext 與 isFollowUp 共用的判斷。text 是要看句子形式的那一句（isFollowUp 傳清過口語包裝的），
+ * original 是訪客的原句——規則 d 的「新請求／問句語氣」排除看原句，因為清理會拿掉「我想問」這種請託外殼。
+ */
+function followUpVerdict(text: string, original: string): boolean {
+  const core = text.trim().replace(TRAILING_PUNCTUATION, "").trim();
   if (!core) return false;
   if (GREETINGS.has(core)) return false;
 
@@ -137,13 +242,26 @@ export function needsContext(message: string): boolean {
     const remainder = followUpRemainder(core);
     if (remainder !== null && charCount(remainder) <= FOLLOW_UP_REMAINDER_MAX_CHARS) return true;
   }
+  if (isChallenge(core) && !ASKS_SOMETHING_NEW.test(original)) return true;
 
   return false;
 }
 
 /**
+ * 檢索用的追問判斷：先清口語包裝，再套 needsContext 的同一套規則（2026-09-28）。
+ * 句首的贅詞與稱呼會把追問句型藏起來——「嗯 妳確定？」的頭詞不在句首、「老師，請問一下，那後來呢？」
+ * 12 字超過句尾「呢」的 10 字上限，拿原句判斷都是 false，只用「妳確定？」去檢索，撈到的正是〈它會答錯嗎〉。
+ * retrieve()、findAnchor、expandQuery 都用這個；needsContext 本身維持只看句子形式。
+ * 只影響檢索：送進模型的問題照舊是原句。
+ * ⚠️ 規則 d 的新請求排除看原句（第十五輪）：「不對 我想問婦女新知」清完是「不對 婦女新知」，不能因此變成質疑。
+ */
+export function isFollowUp(message: string): boolean {
+  return followUpVerdict(cleanSpokenQuery(message), message);
+}
+
+/**
  * 找追問要接的錨點：從最近的 user turn 往回找，最多看 MAX_ANCHOR_LOOKBACK 個 user turn，
- * 跳過本身也是追問（needsContext 為真）或空白的 turn，回傳第一個合格的 turn 文字（trim 後）。
+ * 跳過本身也是追問（isFollowUp 為真，口語的「嗯 妳確定？」也算）或空白的 turn，回傳第一個合格的 turn 文字（trim 後）。
  * 不再有舊版「長度 ≥12」的條件——那正是「你確定沒寫？？」跳過「你有幾個兄弟姊妹？」的原因。
  * 找不到回 null，呼叫端就用原句檢索。
  */
@@ -154,7 +272,7 @@ export function findAnchor(history: HistoryTurn[]): string | null {
     if (turn.role !== "user") continue;
     examined++;
     const text = turn.text.trim();
-    if (!text || needsContext(text)) continue;
+    if (!text || isFollowUp(text)) continue;
     return text;
   }
   return null;
@@ -169,14 +287,112 @@ export function withAnchor(message: string, anchor: string): string {
 }
 
 /**
- * needsContext 為假 → 原句；為真且找得到錨點 → withAnchor(原句, 錨點)；否則原句。
+ * isFollowUp 為假 → 原句；為真且找得到錨點 → withAnchor(原句, 錨點)；否則原句。
+ * （跟 retrieve() 的主查詢同一套判斷；回傳的是還沒清口語包裝的字串，retrieve() 送 embedding 前才清。）
  */
 export function expandQuery(message: string, history: HistoryTurn[] = []): string {
   const current = message.trim();
   if (!current) return current;
-  if (!needsContext(current)) return current;
+  if (!isFollowUp(current)) return current;
 
   const anchor = findAnchor(history);
   if (!anchor) return current;
   return withAnchor(current, anchor);
+}
+
+
+/**
+ * 清理最多跑幾輪：拿掉一段可能讓下一段變成句首（「老師妳好」拿掉後「妳可以跟我說一下」才在句首），
+ * 實際兩輪就收斂，4 是保險。
+ */
+const MAX_CLEAN_PASSES = 4;
+
+/** 清完（去標點後）少於這個字數就用原句——題目規定「清完是空字串或 < 2 字就用原句」 */
+const MIN_CLEANED_CHARS = 2;
+
+const LEADING_PAUSE = new RegExp(`^[${PAUSE}]+`);
+
+/**
+ * 被拿掉的包裝後面留下的逗號：「老師，請問一下，那後來呢？」拿掉「老師」「請問一下」後剩「，，那後來呢？」。
+ * 只收「緊接在另一個停頓後面」的逗號類（，、：；）——那一定是被拿掉的東西留下的；
+ * 內容之間的逗號（「妳是哪裡人，妳爸爸做什麼」）前面是字，不動。
+ */
+const ORPHAN_SEPARATOR = new RegExp(`([${PAUSE}])[，,、：:；;]+`, "g");
+
+/** [口語包裝, 換成什麼]，依序套用 */
+const SPOKEN_RULES: readonly (readonly [RegExp, string])[] = [
+  // 贅詞：嗯、呃、欸（誒是同音的另一種寫法）——純語氣、沒有內容，任何位置都清
+  [/[嗯呃欸誒]+/g, ""],
+  // 要求重講：「妳剛剛講太快了」「剛才說得有點快」。一定要有 妳/你/您 或 剛剛/剛才——
+  // 光「說太快」可能是內容（「她說太快結婚不好」）
+  [/(?:[妳你您](?:剛剛|剛才)?|剛剛|剛才)(?:講|說)話?[得的]?(?:太快|好快|有點快)了?/g, ""],
+  // 要求重講：「我聽不清楚」。一定要「我」開頭——「妳小時候耳朵聽不清楚嗎」是內容
+  [/我(?:剛剛|剛才)?(?:聽不清楚|聽不太清楚|沒聽清楚|沒有聽清楚)/g, ""],
+  // 要求重講：「妳再講一次」「再說一遍」「可以再說一次嗎」，訪客自己的「我再問一次」一起
+  [/[我妳你您]?(?:可以|能)?再(?:講|說|問)(?:一次|一遍)(?:好嗎|嗎)?/g, ""],
+  // 句首稱呼／招呼：後面要接停頓、第二人稱、「請」或「我想」才是在叫人——
+  // 「李元貞老師是哪裡人」的李元貞老師是主詞；「妳好厲害」「妳好嗎」的「好」不是招呼
+  [
+    new RegExp(
+      `${CLAUSE_START}(?:(?:李?元[貞真珍]老師|李老師|老師)(?:妳好|你好|您好|好)?|妳好|你好|您好|哈囉|嗨)(?=[${PAUSE}]|$|[妳你您]|請|我想)`,
+      "g"
+    ),
+    "",
+  ],
+  // 句首請託外殼：「請問一下」「我想問一下」；「我想問的是…」「我想問題出在…」不是外殼
+  [new RegExp(`${CLAUSE_START}(?:請問|我?想請?問問?)(?:一下)?(?![的題])`, "g"), ""],
+  // 句首請託外殼：「妳可以跟我說一下」「可以告訴我」；「告訴我們」「跟我說說」不動
+  [
+    new RegExp(
+      `${CLAUSE_START}[妳你您]?(?:可以|能)(?:(?:跟我|和我)?(?:說|講)一下|告訴我(?!們)|(?:跟我|和我)(?:說|講)(?![說講一]))`,
+      "g"
+    ),
+    "",
+  ],
+  // 連續的「那個」留一個：一串裡最多只有最後一個會是指示詞（「那個那個人是誰」→「那個人是誰」）
+  [/(?:那個){2,}/g, "那個"],
+  // 「那個」後面直接接人稱代名詞：指示詞不能修飾代名詞，一定是贅詞（「那個妳為什麼…」）
+  [/那個(?=[妳你您我])/g, ""],
+  // 「那個」「然後」自成一段（前後都是停頓）才是口頭禪；「那個時候」「然後呢」不動
+  [new RegExp(`${CLAUSE_START}(?:那個|然後)${CLAUSE_END}`, "g"), ""],
+  // 句首的「就是說」（連「也就是說」）；「就是說謊」「就是說話」不動
+  [new RegExp(`${CLAUSE_START}也?就是說(?![謊話])`, "g"), ""],
+];
+
+/**
+ * 口語包裝清理（2026-09-28）：**只**拿來產生 embedding 的查詢字串。
+ * 送進模型的問題、needsContext 與錨點的判斷一律用原句，不經過這裡。
+ *
+ * 動機：/live 展場的主要互動是講話，語音辨識送來的句子常帶口語包裝。
+ * V-07「妳剛剛講太快了 我聽不清楚 妳再講一次妳是哪裡人」原句檢索前 3 名全是網站說明與無關的詩（top 0.630），
+ * 01-biography 的出生段（雲南景東）沒進來，數位人就答「更確切的出生背景，這部分我沒有記載」；
+ * 清成「妳是哪裡人」後出生段排第 2（0.657）。S-03「李元真老師妳好妳可以跟我說一下妳小時候的事嗎」原句前 3 名是
+ * 第 4 章〈人生如夢〉與網站說明；清成「妳小時候的事嗎」後第 1 名是第 1 章〈懷元和弟〉（0.705）。
+ *
+ * 只去掉不帶內容的包裝（SPOKEN_RULES 逐條有理由）：
+ *   - 要求重講：剛剛講太快了、我聽不清楚、妳再講一次、再說一遍
+ *   - 句首稱呼／招呼：老師、李老師、李元貞老師（含辨識錯字 李元真、李元珍）＋妳好
+ *   - 句首請託外殼：請問一下、我想問一下、可以跟我說一下、可以告訴我
+ *   - 贅詞：嗯、呃、欸；那個那個；自成一段的那個／然後；句首的就是說
+ * 🔴 不動會改變語意的字：否定詞、疑問詞（哪裡、為什麼、什麼時候、幾）、人名與專有名詞。
+ *    句中單獨的「那個」不清：「那個時候妳幾歲」「那個人是誰」拿掉就壞了；實測拿掉也沒有好處——
+ *    S-04「那個華西街那個遊行是在幹嘛的」top 0.724，再拿掉句中的那個變成 0.716，前兩名不變。
+ * 清完是空字串或不到 2 個字就用原句（「再說一遍」「老師妳好」整句都是包裝，沒有東西可查）。
+ */
+export function cleanSpokenQuery(message: string): string {
+  let text = message;
+  for (let pass = 0; pass < MAX_CLEAN_PASSES; pass++) {
+    const before = text;
+    for (const [pattern, replacement] of SPOKEN_RULES) text = text.replace(pattern, replacement);
+    if (text === before) break;
+  }
+  if (text === message) return message;
+
+  const tidied = text
+    .replace(/\s+/g, " ")
+    .replace(ORPHAN_SEPARATOR, "$1")
+    .replace(LEADING_PAUSE, "")
+    .trim();
+  if (charCount(tidied.replace(ALL_PUNCTUATION, "")) < MIN_CLEANED_CHARS) return message;
+  return tidied;
 }

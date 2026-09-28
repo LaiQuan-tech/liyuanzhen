@@ -8,6 +8,11 @@
  * 就是語料本體，之後要修內容直接改 .md，不要回頭改這支再重跑
  * （重跑會蓋掉人工修過的地方）。
  *
+ * 🔴 2026-09-28 起還多一個不能重跑的理由：自傳檔裡有 `<!-- ai:exclude 理由 -->` 標記
+ * （在世者的近況——健康、照顧安排、女兒近年生活——不進檢索，見 scripts/chunk-text.ts 的
+ * stripExcluded）。這支會先刪掉所有 10-autobiography-*.md 再重寫，標記會全部消失，
+ * 那些段落就回到檢索裡。scripts/chunk-text.test.ts 的「哨兵」測試會因此紅燈。
+ *
  * ⚠️ 需要 poppler 的 `pdftotext`（macOS：brew install poppler）。
  * 沒有它就直接失敗，不要靜默產出空檔——空語料會讓整站的檢索全滅。
  *

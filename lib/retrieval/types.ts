@@ -17,7 +17,7 @@ export interface RetrievalResult {
   /** 實際使用的檢索來源，方便除錯與驗收 */
   provider: "local" | "supabase";
   /**
-   * 實際拿去 embedding 的查詢字串（原句，或接了上一題錨點的擴展句），供除錯與對話重放驗收。
+   * 實際送去 embedding 的字串（清過口語、必要時接了上一題錨點），供除錯與對話重放驗收。
    * ⚠️ 必須是可選：app/api/chat/route.ts 檢索失敗時有一個手寫的 fallback 物件沒有這兩欄。
    */
   query?: string;

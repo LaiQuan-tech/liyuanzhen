@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   ANSWER_DISCLAIMER,
   SITE_NOTICE,
@@ -13,6 +15,15 @@ import {
   SMALLTALK_FAREWELL_REPLY,
   REFUSAL_PRIVACY_REPLY,
   REFUSAL_PROFANITY_REPLY,
+  REFUSAL_HARASSMENT_REPLY,
+  REFUSAL_MEDICAL_REPLY,
+  REFUSAL_FINANCE_REPLY,
+  REFUSAL_ERRAND_REPLY,
+  REFUSAL_CREATION_REPLY,
+  PRIVACY_REPLY,
+  FALLBACK_REPLY,
+  SMALLTALK_PRAISE_REPLY,
+  TAIL_REPLIES,
 } from "@/content/site";
 
 /**
@@ -44,6 +55,14 @@ describe("文案的人稱分工", () => {
       ["SMALLTALK_THANKS_REPLY", SMALLTALK_THANKS_REPLY],
       ["REFUSAL_PRIVACY_REPLY", REFUSAL_PRIVACY_REPLY],
       ["REFUSAL_PROFANITY_REPLY", REFUSAL_PROFANITY_REPLY],
+      ["REFUSAL_HARASSMENT_REPLY", REFUSAL_HARASSMENT_REPLY],
+      ["REFUSAL_MEDICAL_REPLY", REFUSAL_MEDICAL_REPLY],
+      ["REFUSAL_FINANCE_REPLY", REFUSAL_FINANCE_REPLY],
+      ["REFUSAL_ERRAND_REPLY", REFUSAL_ERRAND_REPLY],
+      ["REFUSAL_CREATION_REPLY", REFUSAL_CREATION_REPLY],
+      ["PRIVACY_REPLY", PRIVACY_REPLY],
+      ["FALLBACK_REPLY", FALLBACK_REPLY],
+      ["SMALLTALK_PRAISE_REPLY", SMALLTALK_PRAISE_REPLY],
     ] as const) {
       expect(line, name).toContain("我");
       // ⚠️ 這兩句以前寫「我能談的是李元貞老師的生平」——第一人稱語氣配第三人稱自稱
@@ -61,13 +80,20 @@ describe("文案的人稱分工", () => {
   });
 
   /** 寒暄回覆會被唸出來、當字幕，要短（需求：60 字以內，不算空白） */
-  it("寒暄與拒絕回覆 60 字以內", () => {
+  it("寒暄與拒絕回覆 60 字以內（含醫療、理財、代勞、創作、隱私攔截、讚美）", () => {
     for (const line of [
+      PRIVACY_REPLY,
+      SMALLTALK_PRAISE_REPLY,
       SMALLTALK_GREETING_REPLY,
       SMALLTALK_THANKS_REPLY,
       SMALLTALK_FAREWELL_REPLY,
       REFUSAL_PRIVACY_REPLY,
       REFUSAL_PROFANITY_REPLY,
+      REFUSAL_HARASSMENT_REPLY,
+      REFUSAL_MEDICAL_REPLY,
+      REFUSAL_FINANCE_REPLY,
+      REFUSAL_ERRAND_REPLY,
+      REFUSAL_CREATION_REPLY,
     ]) {
       expect(Array.from(line.replace(/\s/g, "")).length, line).toBeLessThanOrEqual(60);
     }
@@ -115,8 +141,49 @@ describe("文案的人稱分工", () => {
       SMALLTALK_FAREWELL_REPLY,
       REFUSAL_PRIVACY_REPLY,
       REFUSAL_PROFANITY_REPLY,
+      REFUSAL_HARASSMENT_REPLY,
+      REFUSAL_MEDICAL_REPLY,
+      REFUSAL_FINANCE_REPLY,
+      REFUSAL_ERRAND_REPLY,
+      REFUSAL_CREATION_REPLY,
+      PRIVACY_REPLY,
+      FALLBACK_REPLY,
+      SMALLTALK_PRAISE_REPLY,
     ]) {
       expect(line).not.toMatch(/[*#`]|^\s*[-•]/m);
     }
+  });
+
+  /**
+   * 第十輪、第十一輪：route 會接在已送出的半段後面的句子，ChatPanel／LiveStage 都要認得（只唸那一句）。
+   * 少一句，那種情境下被攔下或失敗的前半段就會被唸出去。
+   */
+  it("TAIL_REPLIES 收齊 route 會接在半段後面的每一句", () => {
+    for (const reply of [
+      GUARDED_REPLY,
+      UNGROUNDED_REPLY,
+      PRIVACY_REPLY,
+      FALLBACK_REPLY,
+      CRISIS_SELF_HARM_REPLY,
+      CRISIS_VIOLENCE_REPLY,
+    ]) {
+      expect(TAIL_REPLIES).toContain(reply);
+    }
+  });
+
+  /**
+   * 🔴 第十輪：讚美回覆裡「婦運是許多人一起走出來的路，不是我一個人的功勞」是她在語料裡的說法，不是站方新加的主張。
+   * 出處釘在這裡：改語料時把這幾句拿掉，這裡會紅——那時回覆也要改成不含事實的說法。
+   */
+  it("讚美回覆的「婦運是集體的成果」在語料裡有出處", () => {
+    const dir = resolve(__dirname, "knowledge");
+    const corpus = readdirSync(dir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(resolve(dir, f), "utf8"))
+      .join("\n");
+    expect(SMALLTALK_PRAISE_REPLY).toContain("婦運是許多人一起走出來的路");
+    expect(corpus).toContain("婦女新知從來不是一個人的事業"); // 03-movement-timeline.md:25
+    expect(corpus).toContain("強調婦運是集體的成果"); // 03-movement-timeline.md:29
+    expect(corpus).toContain("台灣婦女運動不是靠某一個人完成的"); // 04-thought.md:54
   });
 });
