@@ -379,7 +379,7 @@ const ChibiStage = forwardRef<AvatarStageHandle, Props>(function ChibiStage(
         『AI 生成影像』的標記，那個標記不會關掉」，那是一句承諾。
 
         🔴 這一頁比 `/live` 更需要它：那邊畫面中央至少是她**本人的臉**（真實
-        攝影或依其生成的對嘴影像），這裡整個人物都是 AI 生成的 Q 版形象草案。
+        攝影或依其生成的對嘴影像），這裡整個人物都是 AI 生成的 Q 版形象。
 
         ⚠️ `right-3 top-16` 與樣式跟那兩份逐字一致。`top-16` 不是隨手抓的：
         `LiveStage` 最上方有一條身分列，貼 `top-3` 會被它蓋掉——實測手機版就是

@@ -8,13 +8,14 @@ import type { MetadataRoute } from "next";
  *
  * ⚠️ 新增路由時要回來加。這裡沒有自動掃描 app/ 的機制。
  *
- * 🔴 但有兩個**刻意的例外**，不要順手補齊：`/live4` 與 `/chibi`。
- * 兩頁畫面上都是李元貞老師的 Q 版肖像**草案**，使用範圍仍待老師本人與
- * 婦權會確認，兩頁也都有自己的 `robots: noindex`。sitemap 是「請來索引我」
- * 的訊號，跟 noindex 放在一起只會互相矛盾。
- * 授權範圍確認之後再把 `/live4` 加進來（`/chibi` 是內部測試頁，永遠不用加）。
+ * 🔴 但有一個**刻意的例外**，不要順手補齊：`/chibi`。它是內部技術驗證頁，
+ * 不是給訪客看的內容，也有自己的 `robots: noindex`，永遠不用加進來。
+ *
+ * ✅ `/live4` 以前是同類的例外（畫面上的 Q 版肖像使用範圍當時還待老師本人與
+ * 婦權會確認），2026-09-30 專案擁有者確認已經過老師（經婦權會）確認可以使用，
+ * 所以已經拿掉那道頁面層 noindex、加進下面的 ROUTES——見 `app/live4/page.tsx` 檔頭。
  */
-const ROUTES = ["", "/live", "/live2", "/live3", "/chat", "/events", "/about-ai", "/privacy"] as const;
+const ROUTES = ["", "/live", "/live2", "/live3", "/live4", "/chat", "/events", "/about-ai", "/privacy"] as const;
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const base = process.env.NEXT_PUBLIC_SITE_URL ?? "https://liyuanzhen.vercel.app";
