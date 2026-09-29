@@ -7,6 +7,13 @@ describe("fixPronunciation", () => {
     expect(fixPronunciation("婦女新知")).toBe("富女新知");
   });
 
+  it("把「詩」換成「師」（2026-09-29 使用者試聽後選的）", () => {
+    expect(fixPronunciation("我從年輕就開始寫詩，出版過好幾本詩集。〈花蓮的女兒〉這首詩")).toBe(
+      "我從年輕就開始寫師，出版過好幾本師集。〈花蓮的女兒〉這首師"
+    );
+    expect(fixPronunciation("婦女詩人")).toBe("富女師人");
+  });
+
   it("一句話裡出現幾次就換幾次", () => {
     expect(fixPronunciation("婦女新知、婦女運動、婦權會")).toBe(
       "富女新知、富女運動、富權會"

@@ -29,6 +29,13 @@
 export const PRONUNCIATION_FIXES: ReadonlyArray<readonly [string, string]> = [
   ["婦", "富"],
   /**
+   * 詩 shī：使用者回報「詩這個字，發音怪怪的」（2026-09-29）。同一句
+   * 「我從年輕就開始寫詩，出版過好幾本詩集。〈花蓮的女兒〉這首詩，是我寫給故鄉的。」
+   * 用現行設定（eleven_v3_conversational、stability 1.0）合成原字／換「師」／換「施」三版，
+   * 使用者親耳聽過後選「師」。她是詩人，詩、詩集、詩作幾乎每題都會念到。
+   */
+  ["詩", "師"],
+  /**
    * 求助專線號碼要逐字唸（content/site.ts 的 CRISIS_SELF_HARM_REPLY／CRISIS_VIOLENCE_REPLY）。
    * 語音合成會把「113」「110」唸成數量（一百一十三、一百一十），在那一刻聽錯號碼的代價太大。
    *
