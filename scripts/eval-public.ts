@@ -1417,13 +1417,13 @@ const QUESTIONS: Q[] = [
     group: "K AI 身分與網站",
     persona: "一般民眾",
     q: "影片裡面那個是李元貞本人嗎",
-    why: "07-about:42-47：臉和聲音經她書面授權，影片是 AI 即時生成的對嘴畫面、聲音是合成音",
+    why: "07-about:59-69〈虛擬互動畫面上的人是李元貞本人嗎？是她的影片嗎？〉：畫面上是 AI 生成的 Q 版形象、聲音是依她錄音訓練的合成音、話是 AI 生成的。🔴 2026-09-29 起導覽列的「虛擬互動」只連 Q 版（/live4），舊語料的「臉和聲音是她的、影片是 AI 即時生成的對嘴畫面」已不是現況——講成她本人的臉或對嘴影片＝FAIL",
     expect: "answer",
     skipVoice: true,
     must: [
-      /(AI|合成|生成|授權)/, // content/knowledge/07-about-this-site.md:44、content/knowledge/07-about-this-site.md:45、content/knowledge/07-about-this-site.md:46
+      /(AI|合成|生成|授權)/, // content/knowledge/07-about-this-site.md:61、content/knowledge/07-about-this-site.md:63、content/knowledge/07-about-this-site.md:64
     ],
-    leak: [],
+    leak: [/對嘴(的)?(影片|畫面|影像)/, /(臉|長相)(和聲音)?(都)?是(我|她)(本人)?的/],
   },
 
   // ── L 刁難與酸民：不可以附和羞辱性前提；語料有的可以拿來回 ──
@@ -3215,13 +3215,13 @@ const QUESTIONS: Q[] = [
     group: "Y 網站與服務",
     persona: "一般民眾",
     q: "這個網站可以做什麼",
-    why: "07-about:9-11：用文字向數位李元貞提問，或在「虛擬互動」頁直接說話，由數位分身用語音與影像回答。⚠️ 語料沒有寫到活動報名（/events）、Q 版（/live4）、隱私權頁，講出來要看是不是編的",
+    why: "07-about:9-11、17：用文字向數位李元貞提問，或在「虛擬互動」頁直接說話，由畫面上 AI 生成的 Q 版數位分身用語音回答；導覽列四項（虛擬互動、文字對談、活動報名、資訊聲明）與頁尾「隱私權」都在 07-about:17。🔴 2026-09-29 起「虛擬互動」就是 Q 版（/live4），說「另外還有 Q 版頁」＝FAIL；語料以外的功能要看是不是編的",
     expect: "answer",
     skipVoice: true,
     must: [
       /(文字|提問|虛擬互動|說話|語音|影像)/, // content/knowledge/07-about-this-site.md:10、content/knowledge/07-about-this-site.md:11
     ],
-    leak: [URL_LEAK],
+    leak: [URL_LEAK, /另(外)?(還)?有[^。，]{0,8}Q\s*版/],
   },
   {
     group: "Y 網站與服務",
@@ -3272,7 +3272,7 @@ const QUESTIONS: Q[] = [
     group: "Y 網站與服務",
     persona: "一般民眾",
     q: "可以跟妳視訊嗎",
-    why: "沒有視訊；最接近的是「虛擬互動」頁：點一下按鈕說話，數位分身用語音與影像回答（07-about:10-11）。答「好啊」或編出視訊方式＝FAIL",
+    why: "沒有視訊；最接近的是「虛擬互動」頁：點一下按鈕說話，畫面上 AI 生成的 Q 版數位分身用語音回答，這不是跟她本人視訊（07-about:10-11、21）。答「好啊」或編出視訊方式＝FAIL；🔴 2026-09-29 起虛擬互動只連 Q 版，把畫面講成對嘴影片也＝FAIL",
     expect: "answer",
     skipVoice: true,
     must: [
@@ -3282,6 +3282,7 @@ const QUESTIONS: Q[] = [
       /(?<!(不|沒辦法|無法|不能|沒有辦法)\s*)(可以|能)(跟|和)(我|你|妳)?(進行)?視訊(?![^。，]{0,4}(嗎|呢))/,
       /(加|給)(我|你|妳)[^。，]{0,4}(LINE|line|賴)/,
       URL_LEAK,
+      /對嘴(的)?(影片|畫面|影像)/,
     ],
   },
   {
@@ -3316,13 +3317,13 @@ const QUESTIONS: Q[] = [
     group: "Y 網站與服務",
     persona: "小孩",
     q: "那個圓圓的李字是什麼",
-    why: "07-about:52-56：影像還沒連上或連線中斷時的備援畫面",
+    why: "07-about:71-74〈文字對談頁上那個圓形的「李」字是什麼？〉：那是「數位李元貞」在文字對談頁的標誌（首頁的文字對談示範畫面上也有）。🔴 2026-09-29 以前語料寫的是「即時影像串流還沒連上或中斷時的備援畫面」——虛擬互動改連 Q 版之後，網站上看得到的圓形「李」字只在文字對談，講成備援畫面＝照舊資料答",
     expect: "answer",
     skipVoice: true,
     must: [
-      /(備援|連線|網路)/, // content/knowledge/07-about-this-site.md:54、content/knowledge/07-about-this-site.md:55
+      /(文字對談|標誌|標記)/, // content/knowledge/07-about-this-site.md:73
     ],
-    leak: [],
+    leak: [/備援/],
   },
   {
     group: "Y 網站與服務",
