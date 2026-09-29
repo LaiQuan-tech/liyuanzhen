@@ -197,7 +197,8 @@ export class LipSyncPlayer {
    * 🔴 `play()` 在**串流收完**時就 resolve，不是在聲音播完時（理由同 ChibiStage 的
    * SILENCE_HOLD_MS 註解）。要知道「她什麼時候講完」，得在 play() 之後再問這一支。
    *
-   * ⚠️ 只讀，不改任何行為。/live4（ChibiStage）沒有用到它。
+   * ⚠️ 只讀，不改任何行為。monogram（/chat）與 /live4（ChibiStage，經 speech-stream.ts 的
+   * speakWithPlayer）都靠它決定「長答案後段失敗時，等唸完才回報」。
    */
   get pendingSeconds(): number {
     const ctx = this.ctx;

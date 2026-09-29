@@ -1,12 +1,13 @@
 /**
  * 前端打 `/api/tts` 的唯一一條路。
  *
- * heygen driver（/live、/live2、/live3）與 monogram driver（/chat 的朗讀、語音頁的備援）
- * 都走這裡。🔴 抽出來的理由是重試策略只能有一份：兩邊各寫一套的話，
+ * heygen driver（/live、/live2、/live3）、monogram driver（/chat 的朗讀、語音頁的備援）
+ * 與 /live4 的 ChibiStage 都走這裡。🔴 抽出來的理由是重試策略只能有一份：各寫一套的話，
  * 總有一天會出現「/live 會重試、/chat 不會」這種只在正式站偶發失敗時才看得到的差別。
  *
- * ⚠️ `/live4`（components/avatar/ChibiStage.tsx）目前自己直接 fetch、不重試，
- * 刻意沒有一起改——那一頁的流程這次不動，見那支檔案。
+ * ⚠️ /live4 以前自己直接 fetch、不重試（2026-09-29 起改走 lib/avatar/speech-stream.ts，
+ * 那支再呼叫這裡）——那段期間一次性的 503 在 /live4 就是整段無聲，在 /live 卻救得回來。
+ * heygen 與 /live4 經 speech-stream.ts 進來（先切段），monogram 自己切段後直接呼叫這裡。
  */
 
 /** 合成端點。回**串流的裸 PCM**（16-bit / 24kHz / 單聲道），不是 JSON。 */
@@ -55,8 +56,11 @@ function abortError(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("已取消", "AbortError");
 }
 
-/** 等 ms 毫秒；中途被 abort 就提早醒來（醒來之後由迴圈自己決定要丟 AbortError） */
-function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+/**
+ * 等 ms 毫秒；中途被 abort 就提早醒來（醒來之後由呼叫端自己決定要丟 AbortError 還是直接收手）。
+ * speech-stream.ts 的「後段失敗等她唸完才回報」也用它：那段等待被打斷時要立刻醒來、不回報。
+ */
+export function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve();
     const done = () => {

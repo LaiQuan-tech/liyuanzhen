@@ -13,6 +13,7 @@ import ChibiAvatar from "@/components/avatar/ChibiAvatar";
 import type { AvatarStageHandle } from "@/components/avatar/AvatarStage";
 import { LipSyncPlayer } from "@/lib/avatar/lipsync-player";
 import type { Viseme } from "@/lib/avatar/lipsync";
+import { speakWithPlayer } from "@/lib/avatar/speech-stream";
 import { trace } from "@/lib/trace";
 
 /**
@@ -33,7 +34,7 @@ import { trace } from "@/lib/trace";
  * | | AvatarStage（HeyGen） | ChibiStage |
  * |---|---|---|
  * | 影像 | 串流虛擬人，**按 session 計費** | 分層立繪，只有 `/api/tts` 要錢 |
- * | 聲音 | driver 內部去打 `/api/tts` | 這裡直接打 `/api/tts` |
+ * | 聲音 | driver 內部去打 `/api/tts` | 這裡打 `/api/tts`（經 `speakWithPlayer`，同一套切段與重試） |
  * | 對嘴 | 對方的模型做 | `LipSyncPlayer` 從 PCM 算 |
  * | 臉部對位 | 要量（`poses.ts` 記著量錯過一次） | 不需要，嘴型圖層本來就在立繪上 |
  * | 閒置保活 | 需要（有計費中的串流） | 不需要，沒有 session |
@@ -169,7 +170,7 @@ const ChibiStage = forwardRef<AvatarStageHandle, Props>(function ChibiStage(
    * 回報「她正在講話」。
    *
    * ⚠️ 請求在飛的時候就要回報 true，不要等第一個音出來。
-   * `lib/avatar/heygen.ts:133` 對同一件事留了實測紀錄：`/api/chat` 結束到她真的
+   * `lib/avatar/heygen.ts` 的 speak() 開頭對同一件事留了實測紀錄：`/api/chat` 結束到她真的
    * 出聲之間有 2.7 秒，那段時間如果回報 false，畫面會是「答案文字出現、她一臉
    * 閒著不動」。而且 `LiveStage.press()` 是靠這個布林決定要不要 `stop()` 打斷她的
    * ——這段空窗回報 false 的話，訪客在合成中按下按鈕不會取消那一次合成，
@@ -217,40 +218,29 @@ const ChibiStage = forwardRef<AvatarStageHandle, Props>(function ChibiStage(
       setPending(true);
       trace("向 /api/tts 要克隆語音", `${text.length} 字`);
 
-      void (async () => {
-        try {
-          const response = await fetch("/api/tts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            // body 的形狀跟 `app/api/tts/route.ts` 一致：`{ text: string }`
-            body: JSON.stringify({ text }),
-            signal: request.signal,
-          });
-          if (!response.ok || !response.body) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-          // ⚠️ 直接把 body 餵進去，不要先 await 成完整 buffer——
-          // 那會把首字延遲從 3.6 秒變成 12.9 秒（見 lipsync-player.ts 檔頭）。
-          await player.play(response.body);
-        } catch (error) {
-          // 被打斷不是失敗。訪客自己按的按鈕，畫面上不需要任何解釋。
-          if (request.signal.aborted) return;
-          trace(
-            "Q 版語音失敗",
-            error instanceof Error ? error.message : String(error),
-            "error"
-          );
-          player.stop();
+      // 🔴 2026-09-29 起不再自己 fetch：切段（>500 字分段依序合成，/api/tts 超過 600 字會回 400、
+      // 整段沒聲音）、重試（3 次、400/800ms，跟 /live 與 /chat 同一份）、後段失敗「唸完才回報」，
+      // 全在 speakWithPlayer（lib/avatar/speech-stream.ts，有測試——這個元件在 node 測不到）。
+      // 它仍然是直接把串流餵進 player.play()，邊收邊播，首字延遲不變。
+      //
+      // ⚠️ 打斷的語意沒變：stop()／下一則／卸載都會 abort 這個 request，
+      // speakWithPlayer 看到 aborted 就什麼都不回報（被打斷不是失敗）。
+      // ⚠️ 後段失敗時它會等播放圖唸完才 resolve：pending 撐到回報那一刻，speaking 就一直是 true，
+      // 訪客在這段時間按下按鈕，LiveStage 會照常 stop()，回報也一起取消。
+      void speakWithPlayer(player, text, {
+        signal: request.signal,
+        onFailed: (reason) => {
+          trace("Q 版語音失敗", reason, "error");
           speechFailedCb.current?.();
-        } finally {
-          // ⚠️ 要比對是不是自己那一次。新的一段已經開始的話，
-          // 這裡把 pending 清成 false 會讓新的那一段少掉「合成中」的狀態。
-          if (requestRef.current === request) {
-            requestRef.current = null;
-            setPending(false);
-          }
+        },
+      }).finally(() => {
+        // ⚠️ 要比對是不是自己那一次。新的一段已經開始的話，
+        // 這裡把 pending 清成 false 會讓新的那一段少掉「合成中」的狀態。
+        if (requestRef.current === request) {
+          requestRef.current = null;
+          setPending(false);
         }
-      })();
+      });
     },
     [ensurePlayer]
   );

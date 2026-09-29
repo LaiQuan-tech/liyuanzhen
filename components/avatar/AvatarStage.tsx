@@ -12,6 +12,7 @@ import {
 import DigitalAvatar from "@/components/avatar/DigitalAvatar";
 import { createAvatarDriver, resolveProvider } from "@/lib/avatar";
 import type { AvatarDriver, AvatarProvider, AvatarState } from "@/lib/avatar";
+import { isCurrentDriver, nextDriverProvider, shouldHandleFatal } from "@/lib/avatar/fallback";
 import { createIdleTimer } from "@/lib/idle-timer";
 import { trace } from "@/lib/trace";
 import { FullBodyStage, STAGE_MASK, type Pose } from "./full-body-stage";
@@ -231,7 +232,11 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
    * 那就是「切一次分頁之後影像再也回不來」的成因。
    */
   const teardown = useCallback(async (why = "未註明") => {
+    // ⚠️ 停掉之後要把 ref 清成 null。createIdleTimer 的 reportActivity() 就是「重排」，
+    // 留著的話下一次按說話（LiveStage.press 會先 reportActivity）會把這個**已經停掉**的計時器
+    // 重新開起來；新的 session 接上之後它就成了孤兒，75 秒後照樣觸發、把新的 session 收掉。
     idleRef.current?.stop();
+    idleRef.current = null;
     if (capRef.current) {
       clearTimeout(capRef.current);
       capRef.current = null;
@@ -276,6 +281,15 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
   const creatingRef = useRef<Promise<AvatarDriver | null> | null>(null);
 
   /**
+   * 這個 mount 已經因為執行期 onFatal 降級過了：之後 ensureDriver() 一律建 monogram。
+   *
+   * 🔴 一定要是 ref，不可以是 state。ensureDriver 的 deps 不含它；做成 state 放進 deps 的話，
+   * 旗標一變 ensureDriver 就換成新函式 → 掛載 effect（deps [ensureDriver]）重跑 →
+   * 它的 cleanup 會把剛建好、正在用的 driver destroy 掉。
+   */
+  const degradedRef = useRef(false);
+
+  /**
    * 拿到一個可用的 driver，沒有就建一個。冪等。
    *
    * ⚠️ 這裡從 mount-only 的 effect 抽出來，是為了修一個真實的 bug：
@@ -283,16 +297,24 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
    * 永久失效），而 driver 原本只在掛載時建立一次。結果是**任何一次 teardown
    * 之後影像就再也回不來**——而 teardown 會在切到別的分頁時觸發。
    * 它自己的註解與畫面上的「點一下按鈕就可以重新開始」都是做不到的承諾。
+   * 所以閒置、撞到上限、切分頁的 teardown 之後，下一次點按鈕會重建 heygen、重開計費 session
+   * （由使用者的手勢觸發，帳本那三道閘門仍然守著）。
    *
-   * ⚠️ 這也表示 onFatal（含 SESSION_DISCONNECTED）之後，下一次點按鈕會重新
-   * 建立 driver、重新開一個計費 session。那是刻意的：斷線本來就該能重來，
-   * 而且它由使用者的手勢觸發，帳本那三道閘門仍然守著。
+   * 🔴 但**執行期 onFatal 之後不是這樣**（2026-09-29 改）：token 被拒、額度用盡、SDK 載入失敗、
+   * start／attach 失敗、斷線之後，這個 mount 內鎖定 monogram（「李」字＋老師的克隆聲），
+   * 不再建 heygen，重新整理頁面才會再試影像。理由（完整版在 lib/avatar/fallback.ts）：
+   * 斷線當下分不出暫時還是持續；每次重試都要鑄 token、可能開計費 session；
+   * 而舊的「下一次按就重連」從來沒真的成功過——<video> 已經隨降級卸載，下一次按撞上
+   * 「沒有 video 就不開 session」的護欄、那一題無聲也沒有提示，再下一次才真的去連。
+   * 降級之後 driver 由下面 onFatal 立刻建好的 monogram 接手，見那裡的說明。
    */
   const ensureDriver = useCallback(async (): Promise<AvatarDriver | null> => {
     if (driverRef.current) return driverRef.current;
     if (creatingRef.current) return creatingRef.current;
 
     const run = (async () => {
+      /** 這一次建出來的 driver。hooks 比 driver 先建，所以 onFatal 要靠這個變數認出「是誰在報」 */
+      let self: AvatarDriver | null = null;
       const driver = await createAvatarDriver(
         {
           onSpeakingChange: (s) => {
@@ -310,18 +332,59 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
             if (!unmountedRef.current) sessionLimitRef.current = seconds;
           },
           onFatal: (error) => {
-            if (unmountedRef.current) return;
+            // ① 已卸載、或回報的已經不是目前這個 driver（過期）→ 不理。
+            //    否則晚到的舊回報會把下面剛換上的 monogram 當成失效的 driver 收掉。
+            const stage = { unmounted: unmountedRef.current, current: driverRef.current };
+            if (!self || !shouldHandleFatal(stage, self)) return;
+            const failed = self;
             console.error("[avatar] driver 失效，降級為 monogram：", error);
-            // 降級：使用者失去的是那張臉，不是整個聊天
-            void driverRef.current?.destroy();
+
+            // ② 閒置與上限計時器停掉，ref 清成 null——reportActivity() 會把停掉的閒置計時器重新開起來
+            //    （見 teardown），留著的話 75 秒後它會對著一個已經沒有 session 的畫面再收一次。
+            idleRef.current?.stop();
+            idleRef.current = null;
+            if (capRef.current) {
+              clearTimeout(capRef.current);
+              capRef.current = null;
+            }
+
+            // ③ 同步回報 session 結束（理由同 teardown）：沒回報的那一筆，帳本以 3 分鐘上限估算，
+            //    還會在「上限＋30 秒」內佔著一個並發名額。token 被拒的話根本沒有 id，不會送。
+            const closedId = sessionIdRef.current;
+            sessionIdRef.current = null;
+            if (closedId) reportSessionClosed(closedId);
+
+            // ④ 收掉失效的 driver。說話狀態與「這一則沒送到」driver 自己在 onFatal 之前報過了
+            //    （lib/avatar/types.ts 的 onFatal 契約）。
             driverRef.current = null;
             preparingRef.current = null;
+            sessionLimitRef.current = null;
+            void failed.destroy();
             setVideoReady(false);
+
+            // ⑤ 這個 mount 之後一律 monogram。setProvider 讓畫面立刻換成「李」字，不等 driver 建好
+            degradedRef.current = true;
             setProvider("monogram");
+            trace(
+              "影像接不上，改用「李」字＋老師的聲音（重新整理頁面才會再試影像）",
+              error.message,
+              "error"
+            );
+
+            // ⑥ 立刻把 monogram 建好，讓下一次按說話時 prepare({ unmute: true }) 同步段的
+            //    `driverRef.current?.unlockAudio?.()` 在手勢裡解鎖它的 AudioContext。
+            //    🔴 這裡**不**解鎖、不 prepare：onFatal 一定發生在手勢之外，沒有手勢開出來的
+            //    AudioContext 是 suspended、resume() 可能永遠不回來（Safari 尤其明確）。
+            //    代價：降級之後、下一次按之前到的答案放不出聲音，由 monogram 自己回報 onSpeechFailed。
+            //    建失敗（chunk 載不到）的話，finish() 走「沒有 driver」那條給提示，下一次 prepare 會再試。
+            ensureDriver().catch((createError) => {
+              console.error("[avatar] 降級用的 monogram 建不起來：", createError);
+            });
           },
         },
-        providerOverride
+        nextDriverProvider(providerOverride, degradedRef.current)
       );
+      self = driver;
 
       if (unmountedRef.current) {
         void driver.destroy();
@@ -348,7 +411,8 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
 
     creatingRef.current = run;
     return run;
-  }, [providerOverride]);
+    // ⚠️ degradedRef 刻意不在這裡（見它的註解）；reportSessionClosed 是穩定的（deps []），不會讓 ensureDriver 換新
+  }, [providerOverride, reportSessionClosed]);
 
   // driver 生命週期。⚠️ 不在這裡 prepare()——那必須由使用者手勢觸發，
   // 而 reactStrictMode 會讓 effect 跑兩次，等於開兩個計費 session。
@@ -401,8 +465,9 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
           console.warn("[avatar] 自動播放被擋，需要使用者再點一次");
         });
       }
-      // 🔴 語音頁的備援就靠這一行出聲。heygen 載入失敗時 createAvatarDriver 會降級成
-      // monogram（克隆聲走 Web Audio，不走 <video>），它的 AudioContext 只能在手勢裡解鎖——
+      // 🔴 語音頁的備援就靠這一行出聲。兩條路會讓語音頁的 driver 變成 monogram（克隆聲走 Web Audio，
+      // 不走 <video>）：heygen 模組載入失敗（createAvatarDriver 降級），以及執行期 onFatal
+      // （ensureDriver 的 onFatal 立刻建好一個）。它的 AudioContext 只能在手勢裡解鎖——
       // 而語音頁唯一的手勢就是說話按鈕：LiveStage.press() 同步呼叫 prepare({ unmute: true })。
       // 答案要等錄音、辨識、生成全跑完才到，那時早就離開手勢了，少了這行備援就是啞的。
       // 帶 unmute 才做，理由同上：沒帶代表呼叫端不在手勢裡（autoStart）。
@@ -418,7 +483,16 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     const run = (async () => {
       // ⚠️ driver 可能是 null——teardown 之後我們刻意把它丟掉。
       // 這裡重新建一個，否則切一次分頁影像就再也回不來。
-      const driver = driverRef.current ?? (await ensureDriver());
+      // （降級過的 mount 建的是 monogram，見 ensureDriver。）
+      let driver: AvatarDriver | null;
+      try {
+        driver = driverRef.current ?? (await ensureDriver());
+      } catch (error) {
+        // chunk 載不到之類。LiveStage 是 `void prepare()`，丟出去就是 unhandled rejection；
+        // 這一題會走 finish() 的「沒有 driver」提示，下一次按再試
+        console.error("[avatar] driver 建不起來：", error);
+        return;
+      }
       if (!driver) return;
       // 已經備好了就不用再開一個計費 session
       if (driver.metered && videoReady) return;
@@ -434,6 +508,14 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
       }
 
       await driver.prepare(video ?? null);
+
+      // 🔴 等待期間 stage 可能已經不拿著這個 driver 了：接通失敗或斷線（onFatal 降級）、
+      // 切分頁／閒置（teardown）、卸載。那就什麼都不要碰——舊版照樣 setVideoReady(true)、
+      // 開閒置與上限計時器，那兩個計時器沒有人收，到點會把之後新開的 session 收掉。
+      if (!isCurrentDriver({ unmounted: unmountedRef.current, current: driverRef.current }, driver)) {
+        trace("接通回來時這個 driver 已經被換掉，不動畫面", undefined, "warn");
+        return;
+      }
 
       // 🔴 attach() 之後把靜音狀態蓋回去，見 unmutedRef 的說明。
       // 沒有這幾行，自動連線接上的串流在真實 Chrome 上是**播不動**的：
@@ -451,6 +533,10 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
       if (driver.metered) {
         trace("畫面換成即時影像");
         setVideoReady(true);
+        // 照理這時候不會有舊的計時器（teardown 與 onFatal 都清掉了）；真有的話先收掉再換，
+        // 直接蓋掉 ref 會讓舊的變成孤兒，到點把這個新的 session 收掉
+        idleRef.current?.stop();
+        if (capRef.current) clearTimeout(capRef.current);
         idleRef.current = createIdleTimer(IDLE_MS, () => void teardown("閒置逾時"));
         idleRef.current.start();
 
@@ -526,12 +612,13 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
         idleRef.current?.reportActivity();
         const driver = driverRef.current;
         if (!driver) {
-          // 🔴 沒有 driver 就沒有人能說這句話。**不可以**靜靜地丟掉。
+          // 🔴 沒有 driver 就沒有人能說這句話。**不可以**靜靜地丟掉——畫面上的樣子會是
+          // 「文字出來了、她一個字都沒說、沒有任何解釋」，從畫面上完全無法跟麥克風的問題區分。
           //
-          // 這條路真的走得到：onFatal（含斷線）會把 driverRef 清成 null 並降級成
-          // monogram，而那之後送進來的每一則答案都會消失。畫面上的樣子是
-          // 「文字出來了、她一個字都沒說、沒有任何解釋」——正好就是使用者
-          // 一直在回報的症狀，而且從畫面上完全無法跟麥克風的問題區分。
+          // 現在走得到的時機（2026-09-29 起 onFatal 會立刻建 monogram 接手，這裡只剩縫隙）：
+          // - onFatal 之後、monogram 還沒建好的那一瞬間（dynamic import 的往返），或它建不起來
+          // - teardown（閒置、上限、切分頁）之後、下一次按說話重建之前
+          // - 卸載之後
           trace("答案沒有 driver 可送，這一段不會有聲音", `${fullText.length} 字`, "error");
           speechFailedCb.current?.();
           return;
@@ -570,7 +657,7 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
           - `pose`（＝ `fullBody && needsVideo`）在降級成 monogram 時會變成
             undefined。那時候街景要一起消失——人不見了、街還在，畫面會是
             一條空街上浮著一個「李」字，看起來像合成壞掉而不是刻意的降級。
-          - 但 `setProvider("monogram")` 是**執行期**觸發的（見上面斷線那段），
+          - 但 `setProvider("monogram")` 是**執行期**觸發的（見 ensureDriver 的 onFatal），
             直接卸載會讓整片街景在一格內變黑，更像當機。所以保持掛載、
             用 opacity 過渡，跟底下的交叉淡入同樣 700ms。
 

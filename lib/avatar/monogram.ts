@@ -7,10 +7,12 @@ import type { AvatarDriver, AvatarDriverHooks } from "./types";
 /**
  * 圓形「李」字標記 ＋ 老師的克隆聲（`/api/tts` → `LipSyncPlayer`）。
  *
- * 走這一支的有兩條路：
+ * 走這一支的有三條路：
  * - `/chat` 的「開啟朗讀」。正式站沒設 NEXT_PUBLIC_AVATAR_PROVIDER，resolveProvider() 回 monogram，
  *   所以**不需要改任何環境變數**，文字對談的朗讀就是這個聲音。
  * - 語音頁（/live 系列）的 heygen driver 載入失敗時，createAvatarDriver 降級到這裡。
+ * - 語音頁的 heygen 在執行期 onFatal（token 被拒、額度用盡、斷線……）之後，AvatarStage 立刻建一個它接手，
+ *   同一個 mount 內不再換回 heygen（見 lib/avatar/fallback.ts）。它要等下一次按說話才被手勢解鎖。
  *
  * 🔴 2026-09-29 以前這裡是裝置內建語音：挑清單裡第一個 zh-TW 語音，Mac 上挑到的是男聲「Eddy」，
  * 而且每台裝置都不一樣。使用者問「聲音已經改成只有一種版本了嗎？之前有好多版本」，

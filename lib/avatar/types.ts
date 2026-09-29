@@ -26,6 +26,7 @@ export function deriveAvatarState(speaking: boolean, busy: boolean): AvatarState
  *           理由寫在 components/avatar/DigitalAvatar.tsx 的檔頭。
  * mock      假時序、不發聲、不連外。用來把整個 UI（載入、淡入、閒置退場、
  *           失敗降級、浮水印）做完並測完，完全不需要任何帳號或額度。
+ *           失敗降級要用網址注入故障才走得到：`?mockFatal=prepare|speak`（見 mock.ts）。
  * heygen    真的即時串流虛擬人：老師的授權影像 ＋ 克隆聲音 ＋ 即時對嘴。
  *           **已經實作並上線**，是站上的主要呈現（/live 直接指定它）。
  *           實作在 lib/avatar/heygen.ts，走 api.liveavatar.com。
@@ -37,10 +38,18 @@ export interface AvatarDriverHooks {
   onSpeakingChange(speaking: boolean): void;
   /**
    * 不可恢復的錯誤。收到之後呼叫端應該立刻降級回 monogram，
-   * 而且不可以再呼叫這個 driver 的任何方法。
+   * 而且不可以再呼叫這個 driver 的任何方法（AvatarStage 會 destroy 它，並在這個 mount 內鎖定 monogram）。
    *
    * 這是整個 driver 介面存在的主要理由：數位人死掉時，
-   * 網站要退化成「還能用的文字聊天」，而不是白畫面。
+   * 網站要退化成「還能用的文字聊天」（語音頁則是「李」字＋老師的聲音），而不是白畫面。
+   *
+   * 🔴 driver 這一側的契約（2026-09-29，heygen 與 mock 都照做，測試在 heygen.test.ts／mock-fatal.test.ts）：
+   * - **每個 driver 最多報一次**。heygen 的 start() 失敗會先發斷線事件再丟例外，兩條路都要去重。
+   * - **destroy() 之後一律不報**：呼叫端已經不要這個 driver 了（例如切分頁收掉之後 token 才失敗）。
+   * - 它**收下卻還沒送達**的答案（連線中排隊的、正在要語音的、正在送塊的、送完了她還在講的），
+   *   要先收掉說話狀態、再 `onSpeechFailed()` 恰好一次，最後才 `onFatal`。呼叫端降級之後不會補說那一則——
+   *   少了這一步，訪客看到的就是「講到一半斷掉」或「答案出來了她不出聲」，零解釋。
+   *   已經講完、或閒置時才斷線，就只有 onFatal。
    */
   onFatal(error: Error): void;
   /**
@@ -74,6 +83,11 @@ export interface AvatarDriverHooks {
    * monogram（/chat 的朗讀）也走這一支：合成重試用盡、網路斷、429、AudioContext 沒解鎖都一樣。
    * 🔴 它**不可以**改用裝置語音頂替——使用者要的是「只有老師一種聲音」，
    * 寧可明講這次沒聲音，也不要換一個陌生的聲音念她的答案。
+   *
+   * 🔴 規則：**driver 收下（finish）卻送不出的答案，一律 onSpeechFailed**，每一則最多一次。包括：
+   * 沒在連線也沒連上時送進來的、長答案後面某一段失敗（已經送出去的照講，**講完才**報）、
+   * 以及 fatal 時手上那一則（見 onFatal）。被打斷（stop、下一則蓋過去、destroy）不是失敗，不報。
+   * （唯一的例外是 mock「從來沒連線就 finish」那一條，為了不改動它既有的行為照舊安靜忽略，見 mock.ts。）
    */
   onSpeechFailed?(): void;
 }

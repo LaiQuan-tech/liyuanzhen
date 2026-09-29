@@ -34,12 +34,18 @@ export function resolveProvider(
  * 全站只剩這一種聲音）。代價是降級後每次開口一樣用 ElevenLabs 額度；它要的
  * AudioContext 由語音頁的說話按鈕解鎖（AvatarStage.prepare 帶 unmute 的那一段）。
  *
- * 🔴 另一條是**執行期**的 onFatal（token 失敗、額度用盡、斷線……），跟這支函式無關：
- * 它只在 components/avatar/AvatarStage.tsx 把畫面切成「李」字（setProvider("monogram")，
- * 純視覺狀態），driverRef 直接清成 null，不會呼叫這裡、也不會建立 monogram driver。
- * 在使用者下一次手勢重新觸發 ensureDriver()（重建的其實是 heygen，因為 providerOverride
- * 沒變）之前，那之後送進來的每一則答案完全沒有聲音——AvatarStage 的 finish() 發現
- * driverRef 是 null 就直接回報 onSpeechFailed，不會退到這裡的 monogram。
+ * 🔴 另一條是**執行期**的 onFatal（token 被拒、額度用盡、SDK 載入失敗、start／attach 失敗、斷線），
+ * 由 components/avatar/AvatarStage.tsx 處理（2026-09-29 起）：畫面切成「李」字，並立刻經這支函式
+ * 建一個 monogram driver 接手（降級旗標讓它無視頁面指定的 heygen，見 lib/avatar/fallback.ts）。
+ * 那之後**同一個 mount 內一律是 monogram**：不再重建 heygen、不再打 /api/avatar-token，
+ * 重新整理頁面才會再試影像。
+ * - heygen 自己收下卻還沒講完的那一則（排隊中、合成中、講到一半），它在報 onFatal 之前會先報
+ *   onSpeechFailed（見 types.ts 的 onFatal 契約）；降級之後不補說那一則。
+ * - monogram 的 AudioContext 只能在手勢裡解鎖，所以降級之後、下一次按說話之前到的答案放不出聲音，
+ *   由 monogram 自己回報 onSpeechFailed（刻意不在手勢外開 AudioContext，理由見 AvatarStage 的 onFatal）。
+ * ⚠️ 以前（到 2026-09-29 為止）這條路只切畫面、driverRef 清成 null、不建 driver：之後的答案全部沒聲音，
+ * 下一次按重建的又是 heygen、卡在「沒有 <video> 就不開 session」的護欄，那一題連提示都沒有。
+ * ⚠️ 所以建計費 driver 時會先預載 monogram 模組，見 preloadMonogram。
  */
 export async function createAvatarDriver(
   hooks: AvatarDriverHooks,
@@ -47,12 +53,14 @@ export async function createAvatarDriver(
 ): Promise<AvatarDriver> {
   if (provider === "mock") {
     const { createMockDriver } = await import("./mock");
+    preloadMonogram();
     return createMockDriver(hooks);
   }
 
   if (provider === "heygen") {
     try {
       const { createHeygenDriver } = await import("./heygen");
+      preloadMonogram();
       return createHeygenDriver(hooks);
     } catch (error) {
       // 這裡刻意**不**呼叫 hooks.onFatal：降級已經完成，使用者失去的只有那張臉
@@ -63,4 +71,27 @@ export async function createAvatarDriver(
 
   const { createMonogramDriver } = await import("./monogram");
   return createMonogramDriver(hooks);
+}
+
+/**
+ * 先把 monogram 模組載好（只載模組：不建 driver、不碰 AudioContext、不打 /api/tts）。
+ * 只在建計費 driver（heygen、mock）時呼叫；/chat 本來就是 monogram，不需要。
+ *
+ * 🔴 為什麼（2026-09-29）：計費 driver 在執行期 onFatal 之後，AvatarStage 會立刻經 createAvatarDriver
+ * 建一個 monogram 接手，而 monogram 在語音頁是懶載入的 chunk。斷線最常見的成因就是網路不穩，
+ * 那時候這個 chunk 也載得慢——訪客在它載完之前按下說話，driverRef 還是 null，
+ * 手勢裡的 unlockAudio 落空，那一題就沒有聲音。
+ *
+ * 在建計費 driver 的當下（網路正常的時候）先載好，就足夠了：
+ * webpack 的 `__webpack_require__.e` 對已經裝好的 chunk 什麼都不送（installedChunks 是 0 就不推任何 promise，
+ * `Promise.all([])`），`import("./monogram")` 只剩幾個 microtask 就 resolve；onFatal 之後
+ * createAvatarDriver → ensureDriver 把 monogram 放進 driverRef 的整段都在**同一個 task 的 microtask** 裡跑完。
+ * 按說話的 click 是之後的另一個 macrotask，插不進去，所以按下去時 driverRef 一定已經是 monogram。
+ * （預載還沒完就斷線的話，onFatal 的 import 會共用同一個還在飛的 chunk 請求，不會重新開始。）
+ *
+ * ⚠️ 失敗一定要接住：預載只是加速，載不到就等 onFatal 那時再載一次（跟沒有預載時一樣），
+ * 不可以變成 unhandled rejection，也不可以影響這一次回傳的 driver。
+ */
+function preloadMonogram(): void {
+  void import("./monogram").catch(() => {});
 }

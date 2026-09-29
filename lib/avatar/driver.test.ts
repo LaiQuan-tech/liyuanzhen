@@ -78,6 +78,73 @@ describe("createAvatarDriver", () => {
   });
 });
 
+/**
+ * 🔴 建計費 driver 時先預載 monogram 模組（2026-09-29）。
+ *
+ * 執行期 onFatal 之後 AvatarStage 會立刻建一個 monogram 接手，而它在語音頁是懶載入的 chunk。
+ * 斷線多半是網路不穩，那時 chunk 也載得慢：訪客在它載完之前按下說話，driverRef 還是 null、
+ * 手勢裡的 unlockAudio 落空，那一題沒聲音。預載之後，onFatal 的 import 命中已經裝好的 chunk，
+ * 幾個 microtask 就 resolve，按鈕的 click（下一個 macrotask）插不進去——理由寫在 index.ts 的 preloadMonogram。
+ * 這裡鎖的是「建 heygen／mock 的時候真的有去載」與「載不到也不會出事」。
+ */
+describe("createAvatarDriver 預載 monogram（斷線之後按說話要來得及在手勢裡解鎖）", () => {
+  afterEach(() => {
+    vi.doUnmock("./monogram");
+    vi.resetModules();
+  });
+
+  /** 換一份乾淨的模組圖，記錄 ./monogram 被載入幾次 */
+  async function withMonogramSpy(behavior: "ok" | "fail") {
+    vi.resetModules();
+    const loads = { count: 0 };
+    vi.doMock("./monogram", async (importOriginal) => {
+      loads.count += 1;
+      if (behavior === "fail") throw new Error("模擬 monogram chunk 載入失敗");
+      return importOriginal();
+    });
+    const { createAvatarDriver: fresh } = await import("./index");
+    return { create: fresh, loads };
+  }
+
+  /** 預載是 fire-and-forget，給它時間跑完 */
+  const letImportsSettle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  it("🔴 建 heygen driver 就先把 monogram 模組載好（只載模組，回傳的仍然是 heygen）", async () => {
+    const { create, loads } = await withMonogramSpy("ok");
+    const driver = await create(makeHooks().hooks, "heygen");
+    await letImportsSettle();
+
+    expect(driver.provider).toBe("heygen");
+    expect(loads.count).toBe(1);
+  });
+
+  it("mock 也是計費 driver（語意要跟 heygen 一致），一樣預載", async () => {
+    const { create, loads } = await withMonogramSpy("ok");
+    const driver = await create(makeHooks().hooks, "mock");
+    await letImportsSettle();
+
+    expect(driver.provider).toBe("mock");
+    expect(loads.count).toBe(1);
+  });
+
+  it("預載失敗（chunk 載不到）：照樣回傳 heygen driver，也不可以變成 unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const { create, loads } = await withMonogramSpy("fail");
+      const driver = await create(makeHooks().hooks, "heygen");
+      await letImportsSettle();
+
+      expect(driver.provider).toBe("heygen");
+      expect(loads.count).toBe(1);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});
+
 describe("createHeygenDriver", () => {
   it("⚠️ 沒有 <video> 就 onFatal，不可以開 session——開了也沒地方畫，純燒錢", async () => {
     const { hooks, fatal } = makeHooks();
