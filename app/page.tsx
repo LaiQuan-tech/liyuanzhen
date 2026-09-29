@@ -77,7 +77,7 @@ export default function HomePage() {
                 一起進入李元貞的婦女運動和文學創作之路。
               </p>
               <div className="mt-8 flex flex-wrap gap-3">
-                <Link href="/live" className="lz-cta">
+                <Link href="/live4" className="lz-cta">
                   虛擬互動 →
                 </Link>
                 <Link href="/chat" className="lz-cta-ghost">
@@ -282,7 +282,7 @@ export default function HomePage() {
                 資料來源：婦女新知基金會大事紀、臺灣女人（國立臺灣歷史博物館）
               </p>
               <div className="mt-5">
-                <Link href="/live" className="lz-cta">
+                <Link href="/live4" className="lz-cta">
                   想聽她自己講？虛擬互動 →
                 </Link>
               </div>
@@ -406,7 +406,7 @@ export default function HomePage() {
                 點一下就開始說，她用自己的聲音回答。不方便出聲，就用文字。
               </p>
               <div className="mt-8 flex flex-wrap justify-center gap-3">
-                <Link href="/live" className="lz-cta">
+                <Link href="/live4" className="lz-cta">
                   虛擬互動 →
                 </Link>
                 <Link href="/chat" className="lz-cta-ghost">

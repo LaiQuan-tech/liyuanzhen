@@ -14,7 +14,7 @@ import LiveStage from "@/components/live/LiveStage";
  * 而不是順著一起被打開。`/chibi` 用的是同一個判準。
  */
 export const metadata: Metadata = {
-  title: "虛擬互動（Q 版）｜李元貞 × AI 數位人",
+  title: "虛擬互動｜李元貞 × AI 數位人",
   robots: { index: false, follow: false },
 };
 

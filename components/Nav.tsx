@@ -55,8 +55,8 @@ export default function Nav() {
         </nav>
 
         <div className="flex shrink-0 items-center gap-2">
-          {/* 主行動是 /live，不是 /chat */}
-          <Link href="/live" className="lz-cta !px-4 !py-2 !text-[13.5px] lg:hidden">
+          {/* 主行動是 /live4，不是 /chat（2026-09-29 導覽列拿掉 /live 後，虛擬互動改連 /live4） */}
+          <Link href="/live4" className="lz-cta !px-4 !py-2 !text-[13.5px] lg:hidden">
             <span className="sm:hidden">問她</span>
             <span className="hidden sm:inline">虛擬互動</span>
           </Link>
@@ -117,7 +117,7 @@ export default function Nav() {
             </Link>
           ))}
           <div className="p-4">
-            <Link href="/live" className="lz-cta w-full justify-center !flex">
+            <Link href="/live4" className="lz-cta w-full justify-center !flex">
               虛擬互動 →
             </Link>
           </div>

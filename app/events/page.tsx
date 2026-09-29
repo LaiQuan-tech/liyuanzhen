@@ -71,7 +71,7 @@ export default async function EventsPage() {
         )}
 
         <div className="mt-8 flex flex-wrap gap-3">
-          <Link href="/live" className="lz-cta">
+          <Link href="/live4" className="lz-cta">
             虛擬互動 →
           </Link>
           <Link href="/chat?q=李元貞寫過哪些書？" className="lz-cta-ghost">
