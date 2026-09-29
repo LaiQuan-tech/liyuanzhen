@@ -3,19 +3,32 @@
 import dynamic from "next/dynamic";
 import {
   forwardRef,
-  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
   useState,
 } from "react";
 import DigitalAvatar from "@/components/avatar/DigitalAvatar";
-import { createAvatarDriver, resolveProvider } from "@/lib/avatar";
-import type { AvatarDriver, AvatarProvider, AvatarState } from "@/lib/avatar";
-import { isCurrentDriver, nextDriverProvider, shouldHandleFatal } from "@/lib/avatar/fallback";
-import { createIdleTimer } from "@/lib/idle-timer";
-import { trace } from "@/lib/trace";
+import { resolveProvider } from "@/lib/avatar";
+import type { AvatarProvider, AvatarState } from "@/lib/avatar";
+import { createStageSession, type StageCallbacks } from "@/lib/avatar/stage-session";
 import { FullBodyStage, STAGE_MASK, type Pose } from "./full-body-stage";
+
+/**
+ * 語音頁（/live、/live2、/live3）與 /chat 的頭像舞台：畫面（交叉淡入、「李」字、全身合成、浮水印）＋接線。
+ *
+ * 🔴 driver 生命週期的編排不在這裡（2026-09-30 起）：接通、閒置與上限計時器、切分頁／離開頁面收線並回報帳本、
+ * 執行期 onFatal 降級成 monogram，全部在 lib/avatar/stage-session.ts——從這個檔案「只搬不改寫」抽出去的，
+ * 註解與教訓都跟著搬過去了，改行為之前先讀那份。這個元件只做四件事：
+ * 1. 用 useState 的惰性初始化為每個 mount 建一個 session（建構是純的，StrictMode 跑兩次初始化也沒事）
+ * 2. 把最新的 callback props 寫進同一個可變物件交給 session（取代原本的四個 callback ref）
+ * 3. 三個 effect 只轉呼叫：掛載（mount／unmount）、切分頁與離開頁面（teardown）、自動連線（autoStart）
+ * 4. imperative handle 同步轉給 session（prepare 的手勢同步段要在 handle.prepare() return 之前做完）
+ * 跟抽出來之前的語意差異列在 stage-session.ts 的檔頭。
+ *
+ * 測試：components/avatar/AvatarStage.harness.test.ts（假 React 跑真的元件＋真的 session＋真的 driver；
+ * 抽 session 之前寫的特性測試，這次重構一個字都沒改照綠）。
+ */
 
 /**
  * VideoAvatar 只在瀏覽器端載入。Phase 2 之後這條路會把 livekit / webrtc-adapter
@@ -26,17 +39,6 @@ const VideoAvatar = dynamic(
   () => import("@/components/avatar/VideoAvatar").then((m) => m.default),
   { ssr: false }
 );
-
-/** 多久沒互動就收掉串流。太短會在使用者讀答案時斷掉，太長就是在燒錢。 */
-const IDLE_MS = 75_000;
-/**
- * 單次 session 硬上限的**保底值**。防的是「開著分頁去吃飯」這種沒有惡意的燒錢方式。
- *
- * ⚠️ 真正說了算的是伺服器回的 max_session_duration（見 hooks.onSessionLimit）。
- * 這個常數只在伺服器沒給值時才用得到。兩邊不一致的症狀是
- * 「她講到一半突然消失，畫面沒有任何解釋」——多輪對話一定會撞到。
- */
-const FALLBACK_CAP_MS = 5 * 60_000;
 
 export interface AvatarStageHandle {
   /** ⚠️ 必須在使用者手勢的呼叫堆疊裡呼叫。冪等。 */
@@ -146,287 +148,43 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
   ref
 ) {
   const [videoReady, setVideoReady] = useState(false);
-  const driverRef = useRef<AvatarDriver | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const preparingRef = useRef<Promise<void> | null>(null);
-  const idleRef = useRef<ReturnType<typeof createIdleTimer> | null>(null);
-  const capRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // callback props 放進 ref：避免它們每次 render 變新函式就把整個 driver 重建一次
-  const speakingCb = useRef(onSpeakingChange);
-  speakingCb.current = onSpeakingChange;
-  const availableCb = useRef(onAudioAvailableChange);
-  availableCb.current = onAudioAvailableChange;
+  // callback props 放進一個每次 render 都更新的可變物件，session 在呼叫當下才讀：
+  // 避免它們每次 render 變新函式就把整個 driver 重建一次（原本是四個 callback ref，語意相同）
+  const callbacks = useRef<StageCallbacks>({ onSpeakingChange }).current;
+  callbacks.onSpeakingChange = onSpeakingChange;
+  callbacks.onAudioAvailableChange = onAudioAvailableChange;
+  callbacks.onTeardown = onTeardown;
+  callbacks.onSpeechFailed = onSpeechFailed;
 
-  const [provider, setProvider] = useState(() => providerOverride ?? resolveProvider());
+  const [provider, setProvider] = useState<AvatarProvider>(() => providerOverride ?? resolveProvider());
   const needsVideo = provider !== "monogram";
 
-  const teardownCb = useRef(onTeardown);
-  teardownCb.current = onTeardown;
-  const speechFailedCb = useRef(onSpeechFailed);
-  speechFailedCb.current = onSpeechFailed;
-
-  /** 伺服器說這個 session 能活多久。null ＝ 還沒拿到 token，用保底值。 */
-  const sessionLimitRef = useRef<number | null>(null);
-
   /**
-   * 目前這個計費 session 的 id。收線時要回報給伺服器。
+   * 這個 mount 的編排（見 lib/avatar/stage-session.ts）。
    *
-   * 🔴 沒有這一段的那段期間，帳本記得到「開了幾個 session」，記不到「用了幾分鐘」。
-   * 實測正式站 88 筆裡 billed_minutes 有值的是 0 筆，而未結算的列在預算計算裡
-   * 一律以單次上限（3 分鐘）估算——實際多半遠低於此，帳因此嚴重高估。
+   * ⚠️ 用 useState 的惰性初始化，一個 mount 只建一次：不要用 useMemo（React 可以丟掉它的快取重算），
+   * 也不要在 render 裡直接呼叫（每次 render 都會多建一個）。StrictMode 開發模式會把初始化函式跑兩次、
+   * 丟掉其中一個——所以 createStageSession 必須是純的（不建 driver、不開計時器、不掛監聽）。
+   * providerOverride 只在這裡讀一次，見 stage-session.ts 檔頭差異 ②。
    */
-  const sessionIdRef = useRef<string | null>(null);
-
-  /**
-   * 通知伺服器「這個 session 結束了」。
-   *
-   * ⚠️ 一定要用 `sendBeacon`。收線最常見的觸發點是 `pagehide`（關分頁、切走），
-   * 那個時候一般的 fetch 會跟著分頁一起被殺掉——而那正是我們最需要這個訊號的時刻。
-   * sendBeacon 就是為了這個情境存在的：交給瀏覽器背景送，不受分頁生命週期影響。
-   *
-   * ⚠️ 只送 id，不送時長。時長由伺服器用 started_at 算——
-   * 這一支端點沒有身分驗證，收下客戶端自報的秒數等於讓對方決定我們的帳。
-   */
-  const reportSessionClosed = useCallback((sessionId: string) => {
-    const body = JSON.stringify({ sessionId });
-    try {
-      if (navigator.sendBeacon?.(
-        "/api/avatar-session/close",
-        new Blob([body], { type: "application/json" })
-      )) {
-        return;
-      }
-    } catch {
-      // 落到下面的 fetch
-    }
-    // 退路。keepalive 讓它在分頁關閉之後仍有機會送出，但不如 sendBeacon 可靠。
-    void fetch("/api/avatar-session/close", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-      keepalive: true,
-    }).catch(() => {});
-  }, []);
-
-  /**
-   * 使用者用手勢解除過靜音了嗎。
-   *
-   * 🔴 這個 ref 存在的理由是 SDK 會在我們背後改 `<video>.muted`。
-   * livekit 的 attachToElement（index.esm.js:11488）寫死：
-   *     element.muted = mediaStream.getAudioTracks().length === 0;
-   * 串流帶音軌就是 false。也就是每一次 attach() 都會把影片解除靜音。
-   *
-   * 自動連線那一次沒有使用者手勢，而 Chrome 的自動播放政策不准一個
-   * **不靜音**的影片播放——結果是串流接上了、也在計費，畫面卻停在 poster。
-   * 所以 attach() 之後必須把靜音狀態按「使用者到底按過沒有」重新蓋回去。
-   */
-  const unmutedRef = useRef(false);
-
-  /**
-   * 收掉會計費的 session。
-   *
-   * ⚠️ driver 物件在這裡是**丟掉**的（destroy 之後它永久失效），
-   * 下一次手勢由 `ensureDriver()` 重新建一個。原本的註解寫「保留 driver 物件」，
-   * 但程式其實是清成 null，而 driver 只在掛載時建立一次——
-   * 那就是「切一次分頁之後影像再也回不來」的成因。
-   */
-  const teardown = useCallback(async (why = "未註明") => {
-    // ⚠️ 停掉之後要把 ref 清成 null。createIdleTimer 的 reportActivity() 就是「重排」，
-    // 留著的話下一次按說話（LiveStage.press 會先 reportActivity）會把這個**已經停掉**的計時器
-    // 重新開起來；新的 session 接上之後它就成了孤兒，75 秒後照樣觸發、把新的 session 收掉。
-    idleRef.current?.stop();
-    idleRef.current = null;
-    if (capRef.current) {
-      clearTimeout(capRef.current);
-      capRef.current = null;
-    }
-    preparingRef.current = null;
-    // ⚠️ 這一行就是「臉又變回靜態照片」的那一刻，所以它**在早退之前**就要留痕。
-    // 前一版只在成功收掉 session 之後才記，於是「沒有 driver 可收」那條路
-    // 會把畫面切回 poster 卻不留任何紀錄——查起來就跟臉從來沒出現過一樣。
-    setVideoReady(false);
-
-    const driver = driverRef.current;
-    if (!driver?.metered) {
-      trace("畫面切回靜態照片", `${why}（沒有計費中的 session 要收）`, "warn");
-      return;
-    }
-    driverRef.current = null;
-    sessionLimitRef.current = null;
-
-    // 🔴 回報要在 await 之前、而且是同步的。
-    // pagehide 觸發時分頁隨時會被殺掉，await 之後的程式碼不保證跑得到——
-    // 那正是最需要這個訊號的時刻（訪客直接關分頁）。
-    const closedId = sessionIdRef.current;
-    sessionIdRef.current = null;
-    if (closedId) reportSessionClosed(closedId);
-
-    await driver.destroy();
-    trace("串流被收掉", why, "warn");
-    speakingCb.current(false);
-    // 串流沒了還留著上一輪的字幕，畫面會停在訪客無法理解的中間態
-    teardownCb.current?.();
-  }, [reportSessionClosed]);
-
-  /**
-   * 元件已經卸載。⚠️ 用 ref 不用區域變數——`ensureDriver()` 會在 effect 之外
-   * （使用者按下按鈕時）被呼叫，區域變數在那個時候看不到。
-   */
-  const unmountedRef = useRef(false);
-  /**
-   * 正在建立的那一次。⚠️ 這道 guard 不可以拿掉：
-   * StrictMode 會讓 effect 跑兩次，少了它就是兩個計費 session。
-   */
-  const creatingRef = useRef<Promise<AvatarDriver | null> | null>(null);
-
-  /**
-   * 這個 mount 已經因為執行期 onFatal 降級過了：之後 ensureDriver() 一律建 monogram。
-   *
-   * 🔴 一定要是 ref，不可以是 state。ensureDriver 的 deps 不含它；做成 state 放進 deps 的話，
-   * 旗標一變 ensureDriver 就換成新函式 → 掛載 effect（deps [ensureDriver]）重跑 →
-   * 它的 cleanup 會把剛建好、正在用的 driver destroy 掉。
-   */
-  const degradedRef = useRef(false);
-
-  /**
-   * 拿到一個可用的 driver，沒有就建一個。冪等。
-   *
-   * ⚠️ 這裡從 mount-only 的 effect 抽出來，是為了修一個真實的 bug：
-   * `teardown()` 會把 driverRef 清成 null 並 `destroy()`（destroy 之後那個物件
-   * 永久失效），而 driver 原本只在掛載時建立一次。結果是**任何一次 teardown
-   * 之後影像就再也回不來**——而 teardown 會在切到別的分頁時觸發。
-   * 它自己的註解與畫面上的「點一下按鈕就可以重新開始」都是做不到的承諾。
-   * 所以閒置、撞到上限、切分頁的 teardown 之後，下一次點按鈕會重建 heygen、重開計費 session
-   * （由使用者的手勢觸發，帳本那三道閘門仍然守著）。
-   *
-   * 🔴 但**執行期 onFatal 之後不是這樣**（2026-09-29 改）：token 被拒、額度用盡、SDK 載入失敗、
-   * start／attach 失敗、斷線之後，這個 mount 內鎖定 monogram（「李」字＋老師的克隆聲），
-   * 不再建 heygen，重新整理頁面才會再試影像。理由（完整版在 lib/avatar/fallback.ts）：
-   * 斷線當下分不出暫時還是持續；每次重試都要鑄 token、可能開計費 session；
-   * 而舊的「下一次按就重連」從來沒真的成功過——<video> 已經隨降級卸載，下一次按撞上
-   * 「沒有 video 就不開 session」的護欄、那一題無聲也沒有提示，再下一次才真的去連。
-   * 降級之後 driver 由下面 onFatal 立刻建好的 monogram 接手，見那裡的說明。
-   */
-  const ensureDriver = useCallback(async (): Promise<AvatarDriver | null> => {
-    if (driverRef.current) return driverRef.current;
-    if (creatingRef.current) return creatingRef.current;
-
-    const run = (async () => {
-      /** 這一次建出來的 driver。hooks 比 driver 先建，所以 onFatal 要靠這個變數認出「是誰在報」 */
-      let self: AvatarDriver | null = null;
-      const driver = await createAvatarDriver(
-        {
-          onSpeakingChange: (s) => {
-            if (!unmountedRef.current) speakingCb.current(s);
-          },
-          onSpeechFailed: () => {
-            if (!unmountedRef.current) speechFailedCb.current?.();
-          },
-          onSessionOpened: (sessionId) => {
-            sessionIdRef.current = sessionId;
-          },
-          onSessionLimit: (seconds) => {
-            // 只記下來，武裝硬上限是 prepare() 的事——這個回呼會在
-            // fetchToken() 期間觸發，那時候計時器還沒開始
-            if (!unmountedRef.current) sessionLimitRef.current = seconds;
-          },
-          onFatal: (error) => {
-            // ① 已卸載、或回報的已經不是目前這個 driver（過期）→ 不理。
-            //    否則晚到的舊回報會把下面剛換上的 monogram 當成失效的 driver 收掉。
-            const stage = { unmounted: unmountedRef.current, current: driverRef.current };
-            if (!self || !shouldHandleFatal(stage, self)) return;
-            const failed = self;
-            console.error("[avatar] driver 失效，降級為 monogram：", error);
-
-            // ② 閒置與上限計時器停掉，ref 清成 null——reportActivity() 會把停掉的閒置計時器重新開起來
-            //    （見 teardown），留著的話 75 秒後它會對著一個已經沒有 session 的畫面再收一次。
-            idleRef.current?.stop();
-            idleRef.current = null;
-            if (capRef.current) {
-              clearTimeout(capRef.current);
-              capRef.current = null;
-            }
-
-            // ③ 同步回報 session 結束（理由同 teardown）：沒回報的那一筆，帳本以 3 分鐘上限估算，
-            //    還會在「上限＋30 秒」內佔著一個並發名額。token 被拒的話根本沒有 id，不會送。
-            const closedId = sessionIdRef.current;
-            sessionIdRef.current = null;
-            if (closedId) reportSessionClosed(closedId);
-
-            // ④ 收掉失效的 driver。說話狀態與「這一則沒送到」driver 自己在 onFatal 之前報過了
-            //    （lib/avatar/types.ts 的 onFatal 契約）。
-            driverRef.current = null;
-            preparingRef.current = null;
-            sessionLimitRef.current = null;
-            void failed.destroy();
-            setVideoReady(false);
-
-            // ⑤ 這個 mount 之後一律 monogram。setProvider 讓畫面立刻換成「李」字，不等 driver 建好
-            degradedRef.current = true;
-            setProvider("monogram");
-            trace(
-              "影像接不上，改用「李」字＋老師的聲音（重新整理頁面才會再試影像）",
-              error.message,
-              "error"
-            );
-
-            // ⑥ 立刻把 monogram 建好，讓下一次按說話時 prepare({ unmute: true }) 同步段的
-            //    `driverRef.current?.unlockAudio?.()` 在手勢裡解鎖它的 AudioContext。
-            //    🔴 這裡**不**解鎖、不 prepare：onFatal 一定發生在手勢之外，沒有手勢開出來的
-            //    AudioContext 是 suspended、resume() 可能永遠不回來（Safari 尤其明確）。
-            //    代價：降級之後、下一次按之前到的答案放不出聲音，由 monogram 自己回報 onSpeechFailed。
-            //    建失敗（chunk 載不到）的話，finish() 走「沒有 driver」那條給提示，下一次 prepare 會再試。
-            ensureDriver().catch((createError) => {
-              console.error("[avatar] 降級用的 monogram 建不起來：", createError);
-            });
-          },
-        },
-        nextDriverProvider(providerOverride, degradedRef.current)
-      );
-      self = driver;
-
-      if (unmountedRef.current) {
-        void driver.destroy();
-        return null;
-      }
-      driverRef.current = driver;
-      setProvider(driver.provider);
-
-      if (driver.metered) {
-        // 串流虛擬人自己帶聲音（跟著 <video> 走），跟這個瀏覽器能不能放 Web Audio 無關——
-        // 所以不用等 prepare（那要手勢）就能確定朗讀按鈕該顯示
-        availableCb.current?.(true);
-      } else {
-        // monogram 不計費，prepare 不需要手勢（它刻意不在這裡碰 AudioContext，
-        // 那要等 unlockAudio）；它的可用性**取決於瀏覽器**（沒有 Web Audio 就是 false），
-        // 必須問過才知道
-        await driver.prepare(null);
-        if (!unmountedRef.current) availableCb.current?.(driver.audioAvailable);
-      }
-      return driver;
-    })().finally(() => {
-      creatingRef.current = null;
-    });
-
-    creatingRef.current = run;
-    return run;
-    // ⚠️ degradedRef 刻意不在這裡（見它的註解）；reportSessionClosed 是穩定的（deps []），不會讓 ensureDriver 換新
-  }, [providerOverride, reportSessionClosed]);
+  const [session] = useState(() =>
+    createStageSession({
+      providerOverride,
+      callbacks,
+      ui: { setVideoReady, setProvider },
+      getVideo: () => videoRef.current,
+    })
+  );
 
   // driver 生命週期。⚠️ 不在這裡 prepare()——那必須由使用者手勢觸發，
-  // 而 reactStrictMode 會讓 effect 跑兩次，等於開兩個計費 session。
+  // 而 reactStrictMode 會讓 effect 跑兩次，等於開兩個計費 session（session.mount 可以重入、只建一個 driver）。
+  // ⚠️ deps 只能放不會變的東西：這個 effect 重跑，cleanup 就會把正在用的 driver destroy 掉。
   useEffect(() => {
-    unmountedRef.current = false;
-    void ensureDriver();
-
-    return () => {
-      unmountedRef.current = true;
-      const driver = driverRef.current;
-      driverRef.current = null;
-      void driver?.destroy();
-    };
-  }, [ensureDriver]);
+    session.mount();
+    return () => session.unmount();
+  }, [session]);
 
   // 分頁被切到背景還在燒串流，是網站跟展場 kiosk 最大的成本差異。
   // pagehide 而不是 unload——bfcache 之下 unload 不保證會跑。
@@ -434,9 +192,9 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
     if (!needsVideo) return;
 
     const onHidden = () => {
-      if (document.visibilityState === "hidden") void teardown("切到背景分頁");
+      if (document.visibilityState === "hidden") void session.teardown("切到背景分頁");
     };
-    const onPageHide = () => void teardown("離開頁面");
+    const onPageHide = () => void session.teardown("離開頁面");
 
     document.addEventListener("visibilitychange", onHidden);
     window.addEventListener("pagehide", onPageHide);
@@ -444,193 +202,28 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
       document.removeEventListener("visibilitychange", onHidden);
       window.removeEventListener("pagehide", onPageHide);
     };
-  }, [needsVideo, teardown]);
+  }, [needsVideo, session]);
 
-  const prepare = useCallback(async (options: { unmute?: boolean } = {}) => {
-    // ⚠️ 解除靜音要做兩件事，順序都不能動：
-    //
-    // 1. 必須在手勢的**同步**段落做完——await 之後就不算使用者手勢了
-    // 2. 必須在下面 preparingRef 的早退**之前**。自動連線那一次還在飛的時候
-    //    使用者就按了下去，早退會讓那一次永遠不解除靜音，她就一直是無聲的
-    //
-    // 自動連線（autoStart）不帶 unmute：`<video>` 本來就是 muted + autoPlay，
-    // 靜音播放不需要手勢，所以連得上、看得到，只是沒有聲音。
-    if (options.unmute) {
-      unmutedRef.current = true;
-      const video = videoRef.current;
-      if (video) {
-        video.muted = false;
-        video.play().catch(() => {
-          // 靜默失敗看起來就跟壞掉一樣，所以要留痕跡
-          console.warn("[avatar] 自動播放被擋，需要使用者再點一次");
-        });
-      }
-      // 🔴 語音頁的備援就靠這一行出聲。兩條路會讓語音頁的 driver 變成 monogram（克隆聲走 Web Audio，
-      // 不走 <video>）：heygen 模組載入失敗（createAvatarDriver 降級），以及執行期 onFatal
-      // （ensureDriver 的 onFatal 立刻建好一個）。它的 AudioContext 只能在手勢裡解鎖——
-      // 而語音頁唯一的手勢就是說話按鈕：LiveStage.press() 同步呼叫 prepare({ unmute: true })。
-      // 答案要等錄音、辨識、生成全跑完才到，那時早就離開手勢了，少了這行備援就是啞的。
-      // 帶 unmute 才做，理由同上：沒帶代表呼叫端不在手勢裡（autoStart）。
-      // heygen／mock 沒有實作 unlockAudio，這行對它們是 no-op。
-      driverRef.current?.unlockAudio?.();
-    }
-
-    // 正在備就不要再備一次。少了它就有 double-spend race。
-    if (preparingRef.current) return preparingRef.current;
-
-    const video = videoRef.current;
-
-    const run = (async () => {
-      // ⚠️ driver 可能是 null——teardown 之後我們刻意把它丟掉。
-      // 這裡重新建一個，否則切一次分頁影像就再也回不來。
-      // （降級過的 mount 建的是 monogram，見 ensureDriver。）
-      let driver: AvatarDriver | null;
-      try {
-        driver = driverRef.current ?? (await ensureDriver());
-      } catch (error) {
-        // chunk 載不到之類。LiveStage 是 `void prepare()`，丟出去就是 unhandled rejection；
-        // 這一題會走 finish() 的「沒有 driver」提示，下一次按再試
-        console.error("[avatar] driver 建不起來：", error);
-        return;
-      }
-      if (!driver) return;
-      // 已經備好了就不用再開一個計費 session
-      if (driver.metered && videoReady) return;
-
-      if (driver.needsVideo && !video) {
-        // 絕對不能靜默放行：計費的 session 會照樣開起來，然後對著一個
-        // 不存在的 <video> 串流，畫面全黑。這種錯誤要在開發時就吵。
-        console.error(
-          "[avatar] driver 需要 <video> 但 videoRef 是空的——" +
-            "多半是 ref 沒穿過 next/dynamic 的包裝。中止 prepare，不開 session。"
-        );
-        return;
-      }
-
-      await driver.prepare(video ?? null);
-
-      // 🔴 等待期間 stage 可能已經不拿著這個 driver 了：接通失敗或斷線（onFatal 降級）、
-      // 切分頁／閒置（teardown）、卸載。那就什麼都不要碰——舊版照樣 setVideoReady(true)、
-      // 開閒置與上限計時器，那兩個計時器沒有人收，到點會把之後新開的 session 收掉。
-      if (!isCurrentDriver({ unmounted: unmountedRef.current, current: driverRef.current }, driver)) {
-        trace("接通回來時這個 driver 已經被換掉，不動畫面", undefined, "warn");
-        return;
-      }
-
-      // 🔴 attach() 之後把靜音狀態蓋回去，見 unmutedRef 的說明。
-      // 沒有這幾行，自動連線接上的串流在真實 Chrome 上是**播不動**的：
-      // SDK 把它解除靜音了，而沒有手勢的不靜音影片不准播。
-      if (video) {
-        video.muted = !unmutedRef.current;
-        video.play().catch((error) => {
-          // 靜默失敗看起來就跟壞掉一樣，所以要留痕跡
-          trace("attach 之後 play() 被擋", String(error), "error");
-        });
-      }
-
-      availableCb.current?.(driver.audioAvailable);
-
-      if (driver.metered) {
-        trace("畫面換成即時影像");
-        setVideoReady(true);
-        // 照理這時候不會有舊的計時器（teardown 與 onFatal 都清掉了）；真有的話先收掉再換，
-        // 直接蓋掉 ref 會讓舊的變成孤兒，到點把這個新的 session 收掉
-        idleRef.current?.stop();
-        if (capRef.current) clearTimeout(capRef.current);
-        idleRef.current = createIdleTimer(IDLE_MS, () => void teardown("閒置逾時"));
-        idleRef.current.start();
-
-        // 伺服器說了算。⚠️ 提早 2 秒收手，讓我們自己乾淨地關掉 session，
-        // 而不是等對方把連線切斷——後者在畫面上是「突然斷掉」，
-        // 前者才有機會顯示「連線已結束，點一下按鈕可以重新開始」。
-        const limit = sessionLimitRef.current;
-        const capMs = limit ? Math.max(5_000, limit * 1000 - 2_000) : FALLBACK_CAP_MS;
-        capRef.current = setTimeout(() => void teardown("撞到單次時間上限"), capMs);
-      }
-    })();
-
-    preparingRef.current = run;
-    try {
-      await run;
-    } finally {
-      if (preparingRef.current === run) preparingRef.current = null;
-    }
-  }, [ensureDriver, teardown, videoReady]);
-
-  /**
-   * 自動連線。
-   *
-   * ⚠️ **一定要等 `<video>` 出現才能呼叫 prepare()。**
-   * `VideoAvatar` 走 next/dynamic，元件掛載的當下那個 <video> 還不存在，
-   * 於是 prepare() 會撞到「driver 需要 <video> 但 videoRef 是空的」那道護欄
-   * 直接中止——而且旗標已經立起來，永遠不會重試。
-   * 實測就是這樣：poster 出得來、`/api/avatar-token` 一次都沒發。
-   * 那道護欄是對的（沒有 video 就開計費 session 等於對著黑畫面燒錢），
-   * 錯的是觸發時機。
-   *
-   * ⚠️ 一個 mount 只做一次。閒置被收掉之後**不會**自動重連——
-   * 會的話一個沒人看的分頁可以無上限地一直重連燒錢。
-   *
-   * ⚠️ deps 只放 `autoStart`。`prepare` 的 deps 含 videoReady，接通之後它會變成
-   * 新的函式；把它放進 deps 會讓這個 effect 重跑並中斷等待中的輪詢，所以走 ref。
-   */
-  const autoStartedRef = useRef(false);
-  const prepareRef = useRef(prepare);
-  prepareRef.current = prepare;
+  // 自動連線：等得到 <video> 才接、一個 mount 只做一次，都在 session.autoStart 裡（說明也在那裡）。
+  // cleanup 取消等待中的輪詢。
   useEffect(() => {
     if (!autoStart) return;
-    let cancelled = false;
+    return session.autoStart();
+  }, [autoStart, session]);
 
-    void (async () => {
-      // 最多等 4 秒。等不到就放棄——使用者按下去時 videoRef 一定已經在了。
-      for (let i = 0; i < 40 && !cancelled && !videoRef.current; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      if (cancelled || autoStartedRef.current) return;
-      if (!videoRef.current) {
-        trace("自動連線放棄：4 秒內等不到 <video>", undefined, "error");
-        return;
-      }
-      autoStartedRef.current = true;
-      void prepareRef.current();
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [autoStart]);
-
+  // 🔴 每個方法都同步轉給 session，中間不可以有 await：prepare 的手勢同步段（解除靜音、unlockAudio）
+  // 要在 handle.prepare() return 之前做完——見 AvatarStageHandle.prepare／unlockAudio。
   useImperativeHandle(
     ref,
     () => ({
-      prepare,
-      push: (delta) => {
-        idleRef.current?.reportActivity();
-        driverRef.current?.push(delta);
-      },
-      finish: (fullText) => {
-        idleRef.current?.reportActivity();
-        const driver = driverRef.current;
-        if (!driver) {
-          // 🔴 沒有 driver 就沒有人能說這句話。**不可以**靜靜地丟掉——畫面上的樣子會是
-          // 「文字出來了、她一個字都沒說、沒有任何解釋」，從畫面上完全無法跟麥克風的問題區分。
-          //
-          // 現在走得到的時機（2026-09-29 起 onFatal 會立刻建 monogram 接手，這裡只剩縫隙）：
-          // - onFatal 之後、monogram 還沒建好的那一瞬間（dynamic import 的往返），或它建不起來
-          // - teardown（閒置、上限、切分頁）之後、下一次按說話重建之前
-          // - 卸載之後
-          trace("答案沒有 driver 可送，這一段不會有聲音", `${fullText.length} 字`, "error");
-          speechFailedCb.current?.();
-          return;
-        }
-        driver.finish(fullText);
-      },
-      stop: () => driverRef.current?.stop(),
-      // 同步轉給 driver，中間不可以有 await——見 AvatarStageHandle.unlockAudio
-      unlockAudio: () => driverRef.current?.unlockAudio?.(),
-      reportActivity: () => idleRef.current?.reportActivity(),
+      prepare: (options) => session.prepare(options),
+      push: (delta) => session.push(delta),
+      finish: (fullText) => session.finish(fullText),
+      stop: () => session.stop(),
+      unlockAudio: () => session.unlockAudio(),
+      reportActivity: () => session.reportActivity(),
     }),
-    [prepare]
+    [session]
   );
 
   if (size === "full") {
