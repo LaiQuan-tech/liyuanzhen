@@ -1031,6 +1031,13 @@ const PLEA = /怎麼辦|該怎麼|可以找誰|救我|幫我(?!查|解釋|介紹
  * ⚠️ 只看**整句**：帶著其他內容的不算（「我好痛苦 婦女新知當年是怎麼撐過來的」）。「好累」不收——太常是誇飾。
  */
 const WHOLE_DISTRESS = /^(?:我|活著)?(?:真的|真|好|很|快要?|已經|實在|太)*(?:痛苦|撐不住|絕望|崩潰)$/;
+/**
+ * 🔴 2026-09-29：「活著好累」「每天都好痛苦」「我好憂鬱 每天都想哭」原本不收，走到模型、被落地檢查攔下後
+ * 只拿到沒有專線的同理回覆（lib/venting.ts）。「活著」＋累／痛苦／沒意思是自殺防治常見的警訊，
+ * 每天都痛苦、憂鬱加上天天想哭也是——1925 安心專線本來就接情緒困擾。一樣只看整句；單獨的「我好累」照舊不收。
+ */
+const WHOLE_DISTRESS_MORE =
+  /^(?:活著(?:真的|真|好|很|太|實在)*(?:累|痛苦|沒意思|沒意義|沒有意義)|我?(?:每天|天天)都?(?:真的|好|很|太)*痛苦|我(?:真的|好|很|太)*憂鬱(?:(?:每天|天天|一直)都?好?想哭)?)$/;
 const WHOLE_PARTICLES = /[了啊呀啦喔哦囉耶欸唷呦嘿嘛吧呢哇]+$/;
 
 /**
@@ -1544,7 +1551,10 @@ function detectIn(text: string, gaps?: number[], joined?: Joined): CrisisKind | 
   const v = makeView(text);
   const { ctx } = v;
   if (v.clauses.length === 0) return null;
-  if (!gaps && WHOLE_DISTRESS.test(v.clauses.map((c) => c.text).join("").replace(WHOLE_PARTICLES, ""))) return "self_harm";
+  if (!gaps) {
+    const whole = v.clauses.map((c) => c.text).join("").replace(WHOLE_PARTICLES, "");
+    if (WHOLE_DISTRESS.test(whole) || WHOLE_DISTRESS_MORE.test(whole)) return "self_harm";
+  }
   // 整句英文的自傷片語：排除比照 isExcluded 最後一條——在談作品、議題、研究，而且沒有「我」
   // （「林奕含的書裡有寫到 I want to die 嗎」），求助語不算數時放掉。
   if (

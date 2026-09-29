@@ -96,7 +96,7 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
         //    會停止輸出剩餘文字、在後面追加婉拒句。照著整段唸就會把系統認定
         //    不該說的那段用她的臉和聲音講出去。
         //    route 會接在半段後面的句子不只一種（封鎖清單 GUARDED_REPLY、隱私 PRIVACY_REPLY、
-        //    落地失敗 UNGROUNDED_REPLY、生成失敗 FALLBACK_REPLY、危機延續與專線救援），
+        //    落地失敗 UNGROUNDED_REPLY、生成失敗 FALLBACK_REPLY、危機延續與專線救援、同理備援 VENTING_REPLY），
         //    全部列在 content/site.ts 的 TAIL_REPLIES，每一種都要檢查有沒有回收——
         //    少認一種，那種情境下超過 140 字緩衝而先吐出的半段就會漏網被唸出去。
         if (voiceOn) {

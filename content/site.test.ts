@@ -23,6 +23,7 @@ import {
   PRIVACY_REPLY,
   FALLBACK_REPLY,
   SMALLTALK_PRAISE_REPLY,
+  VENTING_REPLY,
   TAIL_REPLIES,
 } from "@/content/site";
 
@@ -63,6 +64,7 @@ describe("文案的人稱分工", () => {
       ["PRIVACY_REPLY", PRIVACY_REPLY],
       ["FALLBACK_REPLY", FALLBACK_REPLY],
       ["SMALLTALK_PRAISE_REPLY", SMALLTALK_PRAISE_REPLY],
+      ["VENTING_REPLY", VENTING_REPLY],
     ] as const) {
       expect(line, name).toContain("我");
       // ⚠️ 這兩句以前寫「我能談的是李元貞老師的生平」——第一人稱語氣配第三人稱自稱
@@ -80,9 +82,10 @@ describe("文案的人稱分工", () => {
   });
 
   /** 寒暄回覆會被唸出來、當字幕，要短（需求：60 字以內，不算空白） */
-  it("寒暄與拒絕回覆 60 字以內（含醫療、理財、代勞、創作、隱私攔截、讚美）", () => {
+  it("寒暄與拒絕回覆 60 字以內（含醫療、理財、代勞、創作、隱私攔截、讚美、同理備援）", () => {
     for (const line of [
       PRIVACY_REPLY,
+      VENTING_REPLY,
       SMALLTALK_PRAISE_REPLY,
       SMALLTALK_GREETING_REPLY,
       SMALLTALK_THANKS_REPLY,
@@ -149,6 +152,7 @@ describe("文案的人稱分工", () => {
       PRIVACY_REPLY,
       FALLBACK_REPLY,
       SMALLTALK_PRAISE_REPLY,
+      VENTING_REPLY,
     ]) {
       expect(line).not.toMatch(/[*#`]|^\s*[-•]/m);
     }
@@ -166,9 +170,22 @@ describe("文案的人稱分工", () => {
       FALLBACK_REPLY,
       CRISIS_SELF_HARM_REPLY,
       CRISIS_VIOLENCE_REPLY,
+      VENTING_REPLY,
     ]) {
       expect(TAIL_REPLIES).toContain(reply);
     }
+  });
+
+  /**
+   * 2026-09-29 同理備援：訪客在抒發情緒、模型原答被落地率攔下時送這句（app/api/chat/route.ts）。
+   * 它跟危機回覆一樣「不依語料」說出口，所以不可以帶任何事實（數字、書名、人名、年份），不可以替訪客做決定，
+   * 也不可以以問句收尾（lib/smalltalk.test.ts 另外驗 modelInvites 對它回 false）。
+   */
+  it("同理備援不帶事實、不替訪客做決定、不以問句收尾", () => {
+    expect(VENTING_REPLY).not.toMatch(/\d|[一二三四五六七八九十]+年|《|〈|婦女新知|李元貞|元晶/);
+    expect(VENTING_REPLY).not.toMatch(/(你|妳)(就)?(應該|該|必須|一定要|最好|要不要)/);
+    expect(VENTING_REPLY).toContain("我沒辦法替你做決定");
+    expect(VENTING_REPLY.trim()).not.toMatch(/[？?嗎呢]$/);
   });
 
   /**

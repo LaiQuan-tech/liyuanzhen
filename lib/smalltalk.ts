@@ -45,6 +45,7 @@ import {
   SMALLTALK_PRAISE_REPLY,
   SMALLTALK_THANKS_REPLY,
   UNGROUNDED_REPLY,
+  VENTING_REPLY,
 } from "../content/site";
 
 /** thanks 與 ack 共用同一句回覆（見 content/site.ts），分開只是為了測試與紀錄看得懂。 */
@@ -224,8 +225,8 @@ function detectPraise(message: string): SmalltalkKind | null {
  *
  * 🔴 第三輪驗收：模型剛問「想聽聽我創辦婦女新知的經過嗎？」，訪客回「好啊」，寒暄路徑卻回「不客氣」。
  * ⚠️ 站方寫死的固定回覆一律不算邀請（第十一輪擴大到全部）：寒暄與讚美、危機、私人資訊／髒話／騷擾／醫療／理財／
- * 代勞／代寫的拒絕、隱私攔截、離題／護欄／落地／生成失敗的罐頭句。它們結尾的「都可以問我」「要不要換個方向試試？」
- * 是泛泛的歡迎，後面接「好」「嗯」就只是應答——讓它走原路徑，query-expansion 會把被拒絕的那一題帶回檢索。
+ * 代勞／代寫的拒絕、隱私攔截、離題／護欄／落地／生成失敗的罐頭句，以及同理備援（2026-09-29）。它們結尾的「都可以問我」
+ * 「要不要換個方向試試？」是泛泛的歡迎，後面接「好」「嗯」就只是應答——讓它走原路徑，query-expansion 會把被拒絕的那一題帶回檢索。
  * 「半段＋罐頭句」也算（結尾是那一句就是）。
  */
 const INVITATION = /想聽|要不要|想不想|可以(?:再)?問我/;
@@ -248,6 +249,7 @@ const FIXED_REPLIES = [
   GUARDED_REPLY,
   UNGROUNDED_REPLY,
   FALLBACK_REPLY,
+  VENTING_REPLY,
 ];
 
 export function modelInvites(modelText: string): boolean {

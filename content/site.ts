@@ -170,14 +170,32 @@ export const CRISIS_VIOLENCE_REPLY =
   "謝謝你願意說出來，這不是你的錯。如果你現在有危險，請馬上打 110 報警。家暴、性侵害、性騷擾都可以打 113 保護專線，24 小時都有人接，會陪你想下一步怎麼做。";
 
 /**
+ * 同理備援（2026-09-29）：訪客在抒發自己的負面情緒（lib/venting.ts 的 detectVenting：好煩、好累、壓力好大、好委屈…），
+ * 模型的回答被落地檢查以「落地率不足」攔下時，app/api/chat/route.ts 改送這句，不是 UNGROUNDED_REPLY。
+ * 危機延續、專線救援在 route 裡排在它前面；未落地引用、未落地數字照舊送 UNGROUNDED_REPLY。
+ *
+ * 🔴 為什麼要有：本機評測 X-07「我媽一直逼我結婚 好煩喔」連續兩次，模型答得很得體（先同理、再講她書裡
+ * 從小看父母吵鬧而排斥婚姻的經歷、最後把決定交還訪客），卻因為換句話說、落地率只有 4–5%，
+ * 被換成「這一題我答不上來——資料裡找不到可靠的出處」。對一個在抒發情緒的人，這句冷冰冰而且答非所問。
+ *
+ * ⚠️ 第一人稱、無 Markdown、60 字以內（會被 TTS 唸出來、也會當字幕），不含任何語料外的事實，
+ * 不替訪客做決定（persona-prompt 規則 11）。用「老師」稱呼真人，跟 PRIVACY_REPLY 同一個道理：是 AI 分身在講老師。
+ * ⚠️ 結尾「都可以問我」是泛泛的歡迎，不是邀請：lib/smalltalk.ts 的 FIXED_REPLIES 收了這句，後面接「好」「嗯」
+ * 只是應答，不會把上一題帶回檢索（lib/smalltalk.test.ts 自動列舉每一個 *_REPLY 驗這件事）。
+ * ⚠️ 也會接在已送出的半段後面（模型超過 140 字緩衝時），所以收在下面的 TAIL_REPLIES。
+ */
+export const VENTING_REPLY =
+  "聽起來你現在真的很不好受，謝謝你願意說出來。我沒辦法替你做決定，想聽老師當年怎麼面對類似的事，都可以問我。";
+
+/**
  * app/api/chat/route.ts 會「接在已經送出的半段後面」的固定回覆：護欄攔下（GUARDED／PRIVACY）、落地失敗（UNGROUNDED）、
- * 生成失敗與推理外洩（FALLBACK），以及危機延續與專線救援（兩句危機回覆）。模型超過 140 字緩衝時前半段已經送出，
- * 攔下或失敗之後 route 才把這幾句接在後面。
+ * 生成失敗與推理外洩（FALLBACK）、危機延續與專線救援（兩句危機回覆），以及同理備援（VENTING）。
+ * 模型超過 140 字緩衝時前半段已經送出，攔下或失敗之後 route 才把這幾句接在後面。
  *
  * 🔴 components/chat/ChatPanel.tsx 與 components/live/LiveStage.tsx 用這張表逐一跑 speakableAnswer：
  * 結尾是其中一句，就只唸那一句——被攔下或失敗的前半段不可以用她的臉和聲音唸出去（理由見 lib/avatar/types.ts）。
  * 第十輪加 PRIVACY_REPLY、第十一輪加 FALLBACK_REPLY（「半段＋抱歉，我這邊出了點狀況」會被整段唸出來）。
- * 兩句危機回覆是同一個洞：延續中被落地檢查攔下、專線救援，也是接在半段後面。
+ * 兩句危機回覆是同一個洞：延續中被落地檢查攔下、專線救援，也是接在半段後面；2026-09-29 的同理備援也一樣。
  * ⚠️ route 新增會接在半段後面的句子時，要加進這張表。
  */
 export const TAIL_REPLIES: readonly string[] = [
@@ -187,6 +205,7 @@ export const TAIL_REPLIES: readonly string[] = [
   FALLBACK_REPLY,
   CRISIS_SELF_HARM_REPLY,
   CRISIS_VIOLENCE_REPLY,
+  VENTING_REPLY,
 ];
 
 /**

@@ -24,11 +24,13 @@ import {
   REFUSAL_FINANCE_REPLY,
   REFUSAL_ERRAND_REPLY,
   REFUSAL_CREATION_REPLY,
+  VENTING_REPLY,
 } from "@/content/site";
 import type { HistoryTurn } from "@/lib/query-expansion";
 import { detectCrisis, hotlineKind, type CrisisKind } from "@/lib/crisis";
 import { detectSmalltalk, modelInvites, type SmalltalkKind } from "@/lib/smalltalk";
 import { detectRefusalRequest, type RefusalKind } from "@/lib/refusal-request";
+import { detectVenting } from "@/lib/venting";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -417,16 +419,29 @@ export async function POST(request: NextRequest) {
         //   (b)(c) 見 lib/crisis.ts 的 hotlineKind。
         // 紀錄：answerSummary 是送出去的危機回覆，blocked 維持 true（後台要看得出原答被攔過）。
         // 延續中照舊走延續（同一類），不看原答。空白答案沒有字可看，救不到也不需要救。
-        const rescued =
+        const byRate =
           (finished.blocked || blocked) &&
           finished.kind === "grounding" &&
           blockReason.startsWith("落地率") &&
-          !continuing
-            ? hotlineKind(finished.text, question)
-            : null;
+          !continuing;
+        const rescued = byRate ? hotlineKind(finished.text, question) : null;
+        // 🔴 同理備援（2026-09-29）：同樣是落地率不足攔下、不是危機延續、專線救援也沒有接手，而訪客這一句是在抒發
+        // 自己的負面情緒（lib/venting.ts：好煩、好累、壓力好大、好委屈…）時，改送 VENTING_REPLY，不是 UNGROUNDED_REPLY。
+        // 本機 X-07「我媽一直逼我結婚 好煩喔」連兩次：模型先同理、再講她從小看父母吵鬧而排斥婚姻、最後把決定交還訪客，
+        // 換句話說讓落地率只有 4–5%，被換成「這一題我答不上來」——對抒發情緒的人冷冰冰又答非所問。
+        // ⚠️ 條件寫法比照專線救援：只接「落地率」開頭的攔截；未落地引用、未落地數字是模型編了出處或數字，照舊 UNGROUNDED_REPLY。
+        // ⚠️ 被攔的原答照樣一個字都不送，只是換一句不含任何事實的替代回覆。危機句在檢索前就被 detectCrisis 接走，
+        // detectVenting 裡也再擋一次，不會跟危機搶。
+        // 紀錄比照專線救援：answerSummary 是送出去的那句、blocked 維持 true（後台看得出原答被攔過）、failed 維持 false。
+        const venting = byRate && !rescued ? detectVenting(question) : null;
         if (rescued) {
           console.warn("[chat] 落地檢查攔下的原答在勸人打專線，改送危機回覆：", rescued);
           answer = CRISIS_REPLY[rescued];
+          blocked = true;
+          controller.enqueue(encoder.encode(answer));
+        } else if (venting) {
+          console.warn("[chat] 落地檢查攔下的是訪客抒發情緒時的回答，改送同理回覆：", venting);
+          answer = VENTING_REPLY;
           blocked = true;
           controller.enqueue(encoder.encode(answer));
         } else if (finished.blocked || blocked) {

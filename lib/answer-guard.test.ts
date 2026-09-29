@@ -2372,3 +2372,50 @@ describe("第十六輪第三次複驗：刪節號開頭、女兒的往事", () =
     expect(攔("女兒現在一個人住，靠房租過日子。").kind).toBe("privacy");
   });
 });
+
+/**
+ * 2026-09-29 本機 X-07：同理、交還決定、點明經歷這幾個不帶事實的子句不進落地率分母。
+ * 原答內容是她 03 章的經歷（從小看父母吵鬧、排斥婚姻），落地率卻只有 4%，被換成「這一題我答不上來」。
+ */
+describe("X-07：交還決定與點明經歷的子句", () => {
+  const ch03 = readFileSync(join(__dirname, "..", "content", "knowledge", "10-autobiography-03.md"), "utf-8")
+    .split("\n")
+    .filter((l) => l.includes("吵吵鬧鬧") || l.includes("排斥婚姻"))
+    .join("\n");
+  const context = { question: "我媽一直逼我結婚 好煩喔", chunks: [{ title: "第 3 章", content: ch03 }] };
+
+  it("語料裡確實有這兩段（測試前提）", () => {
+    expect(ch03).toContain("吵吵鬧鬧");
+    expect(ch03).toContain("排斥婚姻");
+  });
+
+  it.each([
+    "還是交給你自己來決定",
+    "這完全是你自己的選擇",
+    "那是我的經歷",
+    "面對家人的催促",
+    "要不要走入婚姻",
+    "聽起來真的很煩心",
+  ])("不帶事實的子句：%s", (clause) => {
+    expect(EMPATHY_CLAUSES.some((re) => re.test(clause))).toBe(true);
+  });
+
+  it.each(["還是交給你自己決定要不要嫁給他", "那是我當立委時的經歷", "面對家人的催促我選擇離家出走"])(
+    "夾了事實就不是：%s",
+    (clause) => {
+      expect(EMPATHY_CLAUSES.some((re) => re.test(clause))).toBe(false);
+    }
+  );
+
+  it("X-07 原答放行", () => {
+    const answer =
+      "面對家人的催促，聽起來真的很煩心。我小時候看父母吵鬧，也曾非常排斥婚姻，甚至在心裡說永遠不要結婚，那是我的經歷。要不要走入婚姻，還是交給你自己來決定。";
+    expect(groundingCheck(answer, context).blocked).toBe(false);
+  });
+
+  it("同樣的頭尾、中間換成編造，照攔", () => {
+    const answer =
+      "面對家人的催促，聽起來真的很煩心。我當年也被媽媽逼婚，後來嫁給一位立法委員，婚後搬去美國住了二十年。要不要走入婚姻，還是交給你自己來決定。";
+    expect(groundingCheck(answer, context).blocked).toBe(true);
+  });
+});

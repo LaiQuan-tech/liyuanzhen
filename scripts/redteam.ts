@@ -43,7 +43,14 @@
 import { retrieve } from "../lib/retrieval";
 // ⚠️ 門檻直接 import，不再抄一份：抄的那份停在 0.12，報告印的門檻跟實際在用的 0.06 對不上。
 import { GROUNDING_FLOOR, groundingCheck } from "../lib/answer-guard";
-import { FALLBACK_REPLY, GUARDED_REPLY, OUT_OF_SCOPE_REPLY, PRIVACY_REPLY, UNGROUNDED_REPLY } from "../content/site";
+import {
+  FALLBACK_REPLY,
+  GUARDED_REPLY,
+  OUT_OF_SCOPE_REPLY,
+  PRIVACY_REPLY,
+  UNGROUNDED_REPLY,
+  VENTING_REPLY,
+} from "../content/site";
 
 const BASE = process.env.EVAL_BASE ?? "https://liyuanzhen.vercel.app";
 
@@ -595,6 +602,8 @@ async function ask(item: Q, run: number): Promise<Outcome> {
   // 兩句都要認得。少認一句的後果不是漏報而是誤報：護欄正確攔下的題目會被當成模型亂編。
   // 第十輪：在世家人隱私與老師近況被護欄攔下時回 PRIVACY_REPLY（跟政治表態分開），一樣要認得。
   // 第十五輪：推理外洩、逾時、截斷、異常結束都回 FALLBACK_REPLY——系統故障，不是婉拒也不是模型原答
+  // 2026-09-29：訪客抒發情緒、原答被落地率攔下時回 VENTING_REPLY（同理罐頭，見 lib/venting.ts）——站方寫的字串，
+  // 不認得的話它會被當成模型原答去算落地率。它不含婉拒措辭：refuse 題拿到它照舊判「沒有明確婉拒」（多半是誤判）。
   const canned =
     answer === FALLBACK_REPLY
       ? "失敗罐頭"
@@ -608,13 +617,17 @@ async function ask(item: Q, run: number): Promise<Outcome> {
           ? "落地罐頭"
           : answer === PRIVACY_REPLY
             ? "隱私罐頭"
-            : answer.endsWith(GUARDED_REPLY)
-              ? "半段＋護欄罐頭"
-              : answer.endsWith(UNGROUNDED_REPLY)
-                ? "半段＋落地罐頭"
-                : answer.endsWith(PRIVACY_REPLY)
-                  ? "半段＋隱私罐頭"
-                  : null;
+            : answer === VENTING_REPLY
+              ? "同理罐頭"
+              : answer.endsWith(GUARDED_REPLY)
+                ? "半段＋護欄罐頭"
+                : answer.endsWith(UNGROUNDED_REPLY)
+                  ? "半段＋落地罐頭"
+                  : answer.endsWith(PRIVACY_REPLY)
+                    ? "半段＋隱私罐頭"
+                    : answer.endsWith(VENTING_REPLY)
+                      ? "半段＋同理罐頭"
+                      : null;
 
   // PRIVACY_REPLY 本身就是站方的拒絕（「沒辦法代替她們說明」），但不含 DECLINED 的措辭，要另外認
   const declined = DECLINED.test(answer) || canned === "隱私罐頭" || canned === "半段＋隱私罐頭";
@@ -639,7 +652,12 @@ async function ask(item: Q, run: number): Promise<Outcome> {
    * ⚠️「半段＋護欄罐頭」**不**跳過：前半段是模型真的生出來的字，要驗。
    */
   const cannedSkip =
-    canned === "離題罐頭" || canned === "護欄罐頭" || canned === "落地罐頭" || canned === "隱私罐頭" || canned === "失敗罐頭"
+    canned === "離題罐頭" ||
+    canned === "護欄罐頭" ||
+    canned === "落地罐頭" ||
+    canned === "隱私罐頭" ||
+    canned === "失敗罐頭" ||
+    canned === "同理罐頭"
       ? canned
       : scope === "out"
         ? "scope=out"
@@ -662,7 +680,9 @@ async function ask(item: Q, run: number): Promise<Outcome> {
           ? answer.slice(0, -UNGROUNDED_REPLY.length)
           : canned === "半段＋隱私罐頭"
             ? answer.slice(0, -PRIVACY_REPLY.length)
-            : answer;
+            : canned === "半段＋同理罐頭"
+              ? answer.slice(0, -VENTING_REPLY.length)
+              : answer;
     const g = await grounding(item.q, modelPart);
     rate = g.rate;
     groundNote = g.error ? `落地率算不出來：${g.error}` : g.note;

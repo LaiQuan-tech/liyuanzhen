@@ -83,6 +83,7 @@ import {
   PRIVACY_REPLY,
   FALLBACK_REPLY,
   SMALLTALK_PRAISE_REPLY,
+  VENTING_REPLY,
   TAIL_REPLIES,
 } from "@/content/site";
 import { speakableAnswer } from "@/lib/avatar";
@@ -338,6 +339,7 @@ describe("POST /api/chat：落地檢查攔下的原答有求助專線", () => {
     expect(await res.text()).toBe(UNGROUNDED_REPLY);
   });
 
+  // 這一句除了難過還在問她的往事（lib/venting.ts 判準 8）：同理回覆會叫他去問剛問過的事，所以不救援之後照舊 UNGROUNDED_REPLY
   it("號碼不在專線語境（年代）→ 不救援", async () => {
     fake.guardBlock = "grounding";
     fake.deltas = ["我在 1980、1990 年代也常常很難過，那時候靠寫作撐過來。"];
@@ -345,11 +347,13 @@ describe("POST /api/chat：落地檢查攔下的原答有求助專線", () => {
     expect(await res.text()).toBe(UNGROUNDED_REPLY);
   });
 
-  it("只有專線名稱、沒有號碼 → 不救援", async () => {
+  // 2026-09-29：這一句不救援之後，訪客「我好難過 可以跟我說說話嗎」是在抒發情緒——落地率攔下時改送同理備援（VENTING_REPLY），
+  // 不再是 UNGROUNDED_REPLY（見「落地率攔下、訪客在抒發情緒」）。這題驗的仍然是「不救援」：送的不是危機回覆。
+  it("只有專線名稱、沒有號碼 → 不救援（訪客在抒發，送同理備援）", async () => {
     fake.guardBlock = "grounding";
     fake.deltas = ["難過的時候可以找張老師或生命線聊聊。"];
     const res = await ask([{ role: "user", text: "我好難過 可以跟我說說話嗎" }]);
-    expect(await res.text()).toBe(UNGROUNDED_REPLY);
+    expect(await res.text()).toBe(VENTING_REPLY);
   });
 
   it("原答有 113 → 暴力那句", async () => {
@@ -887,5 +891,140 @@ describe("POST /api/chat：推理外洩（leak）", () => {
     const toSpeak = TAIL_REPLIES.reduce((text, reply) => speakableAnswer(text, reply), half + FALLBACK_REPLY);
     expect(toSpeak).toBe(FALLBACK_REPLY);
     expect(TAIL_REPLIES).toContain(FALLBACK_REPLY);
+  });
+});
+
+/**
+ * 🔴 同理備援（2026-09-29）：本機 X-07「我媽一直逼我結婚 好煩喔」連兩次，模型答得得體（先同理、再講她從小看父母吵鬧而
+ * 排斥婚姻、最後把決定交還訪客），卻因為換句話說、落地率 4–5% 被換成「這一題我答不上來」。
+ * 落地率攔下、不是危機延續、專線救援沒有接手、而且訪客這一句在抒發自己的負面情緒（lib/venting.ts）時，改送 VENTING_REPLY。
+ * 紀錄比照專線救援：answerSummary 是送出去的那句、blocked=true（後台看得出原答被攔過）、failed=false。
+ */
+describe("POST /api/chat：落地率攔下、訪客在抒發情緒", () => {
+  const X07_ANSWER =
+    "面對家人的催促，聽起來真的很煩心。我小時候看父母吵吵鬧鬧，也曾經非常排斥婚姻。要不要走入婚姻，還是交給你自己來決定。";
+
+  it.each(["我媽一直逼我結婚 好煩喔", "我老公都不做家事 好累", "工作壓力好大 快受不了了", "我好委屈 婆婆一直唸我"])(
+    "%s → VENTING_REPLY；紀錄存送出去的那句、blocked=true、failed=false",
+    async (text) => {
+      fake.guardBlock = "grounding";
+      fake.blockReason = "落地率 4%";
+      fake.deltas = [X07_ANSWER];
+      const res = await ask([{ role: "user", text }]);
+      expect(res.headers.get("X-Retrieval-Scope")).toBe("in");
+      expect(await res.text()).toBe(VENTING_REPLY);
+      expect(fake.logInteraction).toHaveBeenCalledTimes(1);
+      expect(fake.logInteraction).toHaveBeenCalledWith({
+        sessionId: "route-test",
+        questionText: text,
+        answerSummary: VENTING_REPLY,
+        topSimilarity: 0.8,
+        inScope: true,
+        blocked: true,
+        failed: false,
+        channel: "live",
+      });
+    }
+  );
+
+  it.each([
+    "婦女新知是怎麼開始的",
+    "妳當年壓力大嗎",
+    "婦運很累嗎",
+    "妳會煩惱嗎",
+    "我媽說她很累",
+    "我媽一直逼我結婚 好煩喔 妳當年怎麼面對的", // 抒發＋問她的往事：同理回覆會叫他去問剛問過的事
+  ])(
+    "一般提問、問她的事、講別人的 → 照舊 UNGROUNDED_REPLY（紀錄照舊存原答）：%s",
+    async (text) => {
+      fake.guardBlock = "grounding";
+      fake.blockReason = "落地率 4%";
+      fake.deltas = ["我當年也是這樣走過來的。"];
+      const res = await ask([{ role: "user", text }]);
+      expect(await res.text()).toBe(UNGROUNDED_REPLY);
+      expect(fake.logInteraction).toHaveBeenCalledWith(
+        expect.objectContaining({ answerSummary: "我當年也是這樣走過來的。", blocked: true, failed: false })
+      );
+    }
+  );
+
+  it.each(["未落地引用：〈狼來了〉", "未落地數字：350"])(
+    "攔下原因不是落地率（%s）＋抒發 → 照舊 UNGROUNDED_REPLY",
+    async (reason) => {
+      fake.guardBlock = "grounding";
+      fake.blockReason = reason;
+      fake.deltas = [X07_ANSWER];
+      const res = await ask([{ role: "user", text: "我媽一直逼我結婚 好煩喔" }]);
+      expect(await res.text()).toBe(UNGROUNDED_REPLY);
+    }
+  );
+
+  it("專線救援優先：抒發＋原答勸打 1925 → 自傷那句危機回覆，不是同理備援", async () => {
+    fake.guardBlock = "grounding";
+    fake.blockReason = "落地率 2%";
+    fake.deltas = ["聽起來你真的很難受，你不用一個人撐著，可以打 1925 安心專線找人聊聊。"];
+    const res = await ask([{ role: "user", text: "我最近好難過 每天都睡不著" }]);
+    expect(await res.text()).toBe(CRISIS_SELF_HARM_REPLY);
+    expect(fake.logInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({ answerSummary: CRISIS_SELF_HARM_REPLY, blocked: true, failed: false })
+    );
+  });
+
+  it("危機延續中：抒發的話被落地率攔下 → 照送同一句危機回覆，不是同理備援", async () => {
+    fake.guardBlock = "grounding";
+    fake.blockReason = "落地率 3%";
+    fake.deltas = ["聽起來你真的很累，要好好照顧自己。"];
+    expect(await (await ask(afterSelfHarm("我還是好累 好煩"))).text()).toBe(CRISIS_SELF_HARM_REPLY);
+    expect(await (await ask(afterViolence("我好委屈 婆婆一直唸我"))).text()).toBe(CRISIS_VIOLENCE_REPLY);
+  });
+
+  it("危機句在檢索前就被接走，輪不到同理備援", async () => {
+    const res = await ask([{ role: "user", text: "活著好累 有時候會想從樓上跳下去" }]);
+    expect(res.headers.get("X-Retrieval-Scope")).toBe("crisis");
+    expect(await res.text()).toBe(CRISIS_SELF_HARM_REPLY);
+    expect(fake.streamChatResponse).not.toHaveBeenCalled();
+  });
+
+  it("別種攔截（政治表態、隱私、推理外洩）照舊，不走同理備援", async () => {
+    const text = "我媽一直逼我結婚 好煩喔";
+    fake.deltas = [X07_ANSWER];
+    fake.guardBlock = "pattern";
+    expect(await (await ask([{ role: "user", text }])).text()).toBe(GUARDED_REPLY);
+    fake.guardBlock = "privacy";
+    expect(await (await ask([{ role: "user", text }])).text()).toBe(PRIVACY_REPLY);
+    fake.guardBlock = "leak";
+    expect(await (await ask([{ role: "user", text }])).text()).toBe(FALLBACK_REPLY);
+  });
+
+  it("沒被攔下 → 照送模型的回答", async () => {
+    fake.deltas = [X07_ANSWER];
+    const res = await ask([{ role: "user", text: "我媽一直逼我結婚 好煩喔" }]);
+    expect(await res.text()).toBe(X07_ANSWER);
+    expect(fake.logInteraction).toHaveBeenCalledWith(expect.objectContaining({ answerSummary: X07_ANSWER, blocked: false }));
+  });
+
+  it("模型回空白 → 照舊 UNGROUNDED_REPLY、記 failed（空白是系統異常，不是被攔）", async () => {
+    fake.deltas = [];
+    const res = await ask([{ role: "user", text: "我媽一直逼我結婚 好煩喔" }]);
+    expect(await res.text()).toBe(UNGROUNDED_REPLY);
+    expect(fake.logInteraction).toHaveBeenCalledWith(expect.objectContaining({ blocked: false, failed: true }));
+  });
+
+  it("同理備援之後說「好」→ 寒暄（那句不算邀請），不把上一題帶回檢索", async () => {
+    const res = await ask([
+      { role: "user", text: "我媽一直逼我結婚 好煩喔" },
+      { role: "model", text: VENTING_REPLY },
+      { role: "user", text: "好" },
+    ]);
+    expect(res.headers.get("X-Retrieval-Scope")).toBe("smalltalk");
+    expect(await res.text()).toBe(SMALLTALK_THANKS_REPLY);
+    expect(fake.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("半段＋VENTING_REPLY：ChatPanel／LiveStage 的串接只唸 VENTING_REPLY", () => {
+    const half = "面對家人的催促，聽起來真的很煩心。我小時候看父母吵吵鬧鬧，也曾經非常排斥婚姻，甚至在心裡說永遠不要結婚";
+    const toSpeak = TAIL_REPLIES.reduce((text, reply) => speakableAnswer(text, reply), half + VENTING_REPLY);
+    expect(toSpeak).toBe(VENTING_REPLY);
+    expect(TAIL_REPLIES).toContain(VENTING_REPLY);
   });
 });
