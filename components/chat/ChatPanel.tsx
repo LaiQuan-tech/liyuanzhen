@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import AvatarStage, { type AvatarStageHandle } from "@/components/avatar/AvatarStage";
 import { deriveAvatarState, speakableAnswer } from "@/lib/avatar";
-import { ANSWER_DISCLAIMER, TAIL_REPLIES } from "@/content/site";
+import { ANSWER_DISCLAIMER, TAIL_REPLIES, liveCopy } from "@/content/site";
 import { OPENING_QUESTIONS } from "@/content/suggested-questions";
 
 interface Message {
@@ -17,7 +17,16 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
   const [busy, setBusy] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [voiceOn, setVoiceOn] = useState(false);
-  const [voiceAvailable, setVoiceAvailable] = useState(false);
+  /**
+   * 這個瀏覽器放不放得出老師的聲音。null ＝ driver 還沒回報：
+   * 那段時間什麼都不顯示，不要先秀一句「無法播放」再變成按鈕。
+   */
+  const [voiceAvailable, setVoiceAvailable] = useState<boolean | null>(null);
+  /**
+   * 哪一則回答的聲音沒出來（訊息索引）。提示掛在那一則的免責句下面，答案本身不動——
+   * 跟 /live 的 handleSpeechFailed 同一個規則：提示不可以蓋掉它正在說「在上面」的那段答案。
+   */
+  const [voiceFailedAt, setVoiceFailedAt] = useState<number | null>(null);
 
   // 不要把它改回 useState。理由寫在 deriveAvatarState 的註解裡。
   const avatarState = deriveAvatarState(speaking, busy);
@@ -26,6 +35,14 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
   const stageRef = useRef<AvatarStageHandle>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentInitial = useRef(false);
+  /**
+   * 🔴 朗讀開關的**即時**值。send() 是 useCallback，閉包裡的 voiceOn 是送出那一刻的值——
+   * 答案串流到一半關掉朗讀的話，舊閉包仍然是 true，串流結束時照樣 finish()，
+   * 訪客剛關掉的聲音又自己念起來。所以串流中與串流後的判斷一律讀這個 ref。
+   */
+  const voiceOnRef = useRef(false);
+  /** 正要唸的是哪一則（訊息索引），onSpeechFailed 用它決定提示掛在哪裡 */
+  const speakingIndexRef = useRef<number | null>(null);
 
   useEffect(() => {
     sessionIdRef.current =
@@ -51,10 +68,19 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
 
       setInput("");
       setBusy(true);
+      setVoiceFailedAt(null);
 
-      stageRef.current?.stop(); // 上一題還在唸的話先閉嘴
+      // 上一題還在唸的話先閉嘴；合成請求還在飛的話一起取消（driver.stop 兩件都做）
+      stageRef.current?.stop();
+      // 🔴 這一下送出就是使用者手勢，而且必須在任何 await 之前。朗讀要等整段答案才開口，
+      // 那時早就離開手勢了——AudioContext 只能在這裡解鎖或 resume（iOS 切到背景再回來會被暫停，
+      // 不能只靠「開啟朗讀」那一下）。只在朗讀開著時做：深連結 ?q= 自動送出不是手勢，
+      // 而那時朗讀一定是關的（預設關）。
+      if (voiceOnRef.current) stageRef.current?.unlockAudio?.();
 
       const history = [...messages, { role: "user" as const, text: question }];
+      /** 這一題的回答會落在哪個索引 */
+      const answerIndex = history.length;
       setMessages([...history, { role: "model", text: "" }]);
 
       try {
@@ -87,8 +113,9 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
           const delta = decoder.decode(value, { stream: true });
           answer += delta;
 
-          // 逐句朗讀的 driver 會邊收邊唸；等整段才開口的 driver 會忽略它
-          if (voiceOn) stageRef.current?.push(delta);
+          // 現在每個 driver 都等整段答案才開口，會忽略它。留著是因為 AvatarStage 的 push
+          // 會順手回報活動，串流虛擬人（heygen）的閒置計時器靠它知道使用者還在。
+          if (voiceOnRef.current) stageRef.current?.push(delta);
           setMessages([...history, { role: "model", text: answer }]);
         }
 
@@ -99,8 +126,11 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
         //    落地失敗 UNGROUNDED_REPLY、生成失敗 FALLBACK_REPLY、危機延續與專線救援、同理備援 VENTING_REPLY），
         //    全部列在 content/site.ts 的 TAIL_REPLIES，每一種都要檢查有沒有回收——
         //    少認一種，那種情境下超過 140 字緩衝而先吐出的半段就會漏網被唸出去。
-        if (voiceOn) {
+        //
+        //    ⚠️ 讀 voiceOnRef 不讀 voiceOn：串流途中關掉朗讀的話，這裡就不能再開口（見 voiceOnRef）。
+        if (voiceOnRef.current) {
           const toSpeak = TAIL_REPLIES.reduce((text, reply) => speakableAnswer(text, reply), answer);
+          speakingIndexRef.current = answerIndex;
           stageRef.current?.finish(toSpeak);
         }
       } catch {
@@ -111,8 +141,16 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
         setBusy(false);
       }
     },
-    [busy, messages, voiceOn]
+    [busy, messages]
   );
+
+  /**
+   * 這一則的聲音沒出來（合成重試用盡、網路斷、429、AudioContext 沒解鎖）。
+   * 🔴 不會退回裝置語音——全站只剩老師一種聲音，寧可明講這次沒唸出來。
+   */
+  const handleSpeechFailed = useCallback(() => {
+    setVoiceFailedAt(speakingIndexRef.current);
+  }, []);
 
   // 深連結：/chat?q=… 自動送出，讓時間軸與金句卡可以直接把問題帶進來
   useEffect(() => {
@@ -134,21 +172,28 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
             size="sm"
             onSpeakingChange={setSpeaking}
             onAudioAvailableChange={setVoiceAvailable}
+            onSpeechFailed={handleSpeechFailed}
           />
         </div>
         <div className="flex items-center gap-2">
-          {voiceAvailable ? (
+          {voiceAvailable === true ? (
             <button
               type="button"
               onClick={() => {
-                const next = !voiceOn;
+                const next = !voiceOnRef.current;
+                voiceOnRef.current = next;
                 setVoiceOn(next);
                 if (next) {
-                  // ⚠️ 這一下點擊就是我們需要的自動播放解鎖手勢，也是串流開始計費的
-                  //    那一刻。刻意不放在 useEffect 裡：StrictMode 會讓 effect 跑
-                  //    兩次，等於開兩個計費 session。
+                  // 🔴 第一行、同步：這一下點擊就是解鎖 AudioContext 的手勢
+                  //    （老師的聲音走 Web Audio，見 AvatarStageHandle.unlockAudio）。
+                  stageRef.current?.unlockAudio?.();
+                  // ⚠️ 設成串流虛擬人（NEXT_PUBLIC_AVATAR_PROVIDER=heygen）時，這一下也是
+                  //    串流開始計費的那一刻。刻意不放在 useEffect 裡：StrictMode 會讓 effect
+                  //    跑兩次，等於開兩個計費 session。
                   void stageRef.current?.prepare();
                 } else {
+                  // 關掉就要真的安靜：正在唸的停掉、還在飛的合成請求取消（driver.stop 兩件都做）。
+                  // 串流還沒結束的那一則也不會再開口——send() 讀的是 voiceOnRef。
                   stageRef.current?.stop();
                 }
               }}
@@ -157,9 +202,10 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
             >
               {voiceOn ? "🔊 朗讀中" : "🔈 開啟朗讀"}
             </button>
-          ) : (
-            <span className="text-[12px] text-muted-light">此裝置無中文語音</span>
-          )}
+          ) : voiceAvailable === false ? (
+            // 聲音是伺服器合成的，瀏覽器只負責播放；走到這裡代表它沒有 Web Audio
+            <span className="text-[12px] text-muted-light">此瀏覽器無法播放語音</span>
+          ) : null}
           {avatarState === "speaking" && (
             <button
               type="button"
@@ -222,6 +268,13 @@ export default function ChatPanel({ initialQuestion }: { initialQuestion?: strin
               {msg.role === "model" && msg.text && (
                 <p className="mt-1.5 px-1 text-[11.5px] leading-snug text-muted-light">
                   {ANSWER_DISCLAIMER}
+                </p>
+              )}
+              {/* 聲音沒出來的提示：文案與版位照 /live（LiveStage 的 handleSpeechFailed）——
+                  小字掛在答案與免責句**下面**，不取代答案，因為它說的就是「答案在上面」。 */}
+              {msg.role === "model" && msg.text && i === voiceFailedAt && (
+                <p role="status" className="mt-1 px-1 text-[11.5px] leading-snug text-brand">
+                  {liveCopy.voiceFailed}
                 </p>
               )}
             </div>

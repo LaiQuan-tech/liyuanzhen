@@ -38,6 +38,9 @@ const LIMIT_PER_DAY = 200;
  * ⚠️ 這個數字的單位是「請求」不是「問題」。語音一輪要打 3 支端點，
  * 所以 4000 約等於 1300 輪語音對話——對一個提案展示站綽綽有餘，
  * 但仍然是一道真正的天花板。改的時候記得換算。
+ *
+ * ⚠️ 這個換算只算了語音頁：/chat 開啟朗讀之後，每則答案也會多打 1 次 /api/tts，
+ * 超過 500 字被切段的話是 2～3 次（見 lib/avatar/speech-segments.ts），一樣算進這個總量。
  */
 const LIMIT_GLOBAL_PER_DAY = Number(process.env.RATE_LIMIT_GLOBAL_PER_DAY ?? 4000);
 

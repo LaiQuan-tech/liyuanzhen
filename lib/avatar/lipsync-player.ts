@@ -179,6 +179,33 @@ export class LipSyncPlayer {
   }
 
   /**
+   * `AudioContext` 現在的狀態；還沒開過（沒 prime、沒 play）就是 null。
+   *
+   * 給「不在使用者手勢裡才要開始播」的呼叫端先問一聲（lib/avatar/monogram.ts）：
+   * `play()` 遇到 suspended 會 `await ctx.resume()`，而沒有手勢的 resume() 可能**永遠不 resolve**——
+   * 直接呼叫會讓整條朗讀卡住，畫面停在「回答中」。
+   *
+   * ⚠️ 只讀，不改任何行為。/live4（ChibiStage）沒有用到它。
+   */
+  get contextState(): AudioContextState | null {
+    return this.ctx?.state ?? null;
+  }
+
+  /**
+   * 已經排進播放圖、還沒播完的秒數（播放時鐘，不是牆上時鐘）。沒有東西在排就是 0。
+   *
+   * 🔴 `play()` 在**串流收完**時就 resolve，不是在聲音播完時（理由同 ChibiStage 的
+   * SILENCE_HOLD_MS 註解）。要知道「她什麼時候講完」，得在 play() 之後再問這一支。
+   *
+   * ⚠️ 只讀，不改任何行為。/live4（ChibiStage）沒有用到它。
+   */
+  get pendingSeconds(): number {
+    const ctx = this.ctx;
+    if (!ctx) return 0;
+    return Math.max(0, this.nextAt - ctx.currentTime);
+  }
+
+  /**
    * 在使用者手勢裡先把 `AudioContext` 開起來。
    *
    * 🔴 呼叫它的時機是**點擊處理函式的第一行，任何 await 之前**。

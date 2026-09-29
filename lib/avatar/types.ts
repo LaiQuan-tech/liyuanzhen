@@ -17,8 +17,11 @@ export function deriveAvatarState(speaking: boolean, busy: boolean): AvatarState
 }
 
 /**
- * monogram  圓形「李」字標記 ＋ 瀏覽器 TTS。這是**備援**，不是主要呈現：
- *           零成本、不連外，是其他 driver 掛掉時的退路，所以永遠不會被移除。
+ * monogram  圓形「李」字標記 ＋ 老師的克隆聲（/api/tts，實作在 lib/avatar/monogram.ts）。
+ *           /chat 的朗讀就是它（正式站預設值），也是其他 driver 掛掉時的退路，所以永遠不會被移除。
+ *           不開計費 session、不需要 <video>，但每次朗讀都會用到 ElevenLabs 額度。
+ *           🔴 2026-09-29 起全站只剩老師這一種聲音：裝置內建語音已經整個拿掉，
+ *           不可以再加回來當任何一條路的退路（理由見 monogram.ts 檔頭）。
  *           ⚠️ 它刻意長得不像人臉——備援畫面要讓人一眼看出串流沒接上，
  *           理由寫在 components/avatar/DigitalAvatar.tsx 的檔頭。
  * mock      假時序、不發聲、不連外。用來把整個 UI（載入、淡入、閒置退場、
@@ -67,14 +70,18 @@ export interface AvatarDriverHooks {
    * 指令送得出去，聲音不會出來（實測她的聲軌峰值 0.0001）。
    * 沒有它，TTS 一失敗訪客看到的就是「按了、講了、她不理我」，
    * 而且畫面上沒有任何線索。那正是使用者連續回報的症狀。
+   *
+   * monogram（/chat 的朗讀）也走這一支：合成重試用盡、網路斷、429、AudioContext 沒解鎖都一樣。
+   * 🔴 它**不可以**改用裝置語音頂替——使用者要的是「只有老師一種聲音」，
+   * 寧可明講這次沒聲音，也不要換一個陌生的聲音念她的答案。
    */
   onSpeechFailed?(): void;
 }
 
 /**
- * 所有 driver 都自己擁有音訊輸出，呼叫端不可以另外再開一路瀏覽器 TTS——
+ * 所有 driver 都自己擁有音訊輸出，呼叫端不可以另外再開一路聲音（例如自己去打 /api/tts）——
  * 否則會有兩個聲音疊在一起講同一段話。這件事靠介面本身保證：
- * ChatPanel 拿不到 Speaker，只拿得到 driver。
+ * ChatPanel 拿不到播放器，只拿得到 driver。
  *
  * ⚠️ 任何一個方法都不可以把例外丟給呼叫端。錯誤一律走 hooks.onFatal。
  */
@@ -91,24 +98,44 @@ export interface AvatarDriver {
    */
   readonly metered: boolean;
   /**
-   * prepare() 之後才有意義：這個 driver 在「這台裝置上」到底發不發得出聲音。
-   * monogram 會因為裝置沒有中文語音而是 false，這時 UI 要顯示「此裝置無中文語音」。
+   * prepare() 之後才有意義：這個 driver 在「這個瀏覽器上」到底發不發得出聲音。
+   * monogram 在瀏覽器沒有 Web Audio（放不了裸 PCM）時是 false，
+   * 這時 UI 要顯示「此瀏覽器無法播放語音」，而不是一顆按了沒反應的按鈕。
+   * （跟裝置有沒有裝中文語音已經無關——聲音是伺服器合成的。）
    */
   readonly audioAvailable: boolean;
 
   /**
    * 必須在使用者手勢的呼叫堆疊裡呼叫（自動播放政策），而且 heygen 從這裡開始計費。
    * 冪等：重複呼叫只會生效一次。
+   *
+   * ⚠️ 例外：AvatarStage 對不計費的 driver（monogram）會在**掛載時、沒有手勢**就呼叫
+   * `prepare(null)`，用來問 audioAvailable。所以要碰 AudioContext 的事不能放在這裡，放 unlockAudio。
    */
   prepare(video: HTMLVideoElement | null): Promise<void>;
 
   /**
-   * 串流中的增量文字。等整段答案才開口的 driver（heygen）會直接忽略它——
+   * 在使用者手勢的**同步段落**（任何 await 之前）解鎖音訊輸出。
+   * 自己用 Web Audio 發聲的 driver（monogram）在這裡建立／resume AudioContext；
+   * 聲音跟著 <video> 走的 driver（heygen、mock）不需要實作。
+   *
+   * 🔴 沒有手勢開出來的 AudioContext 是 suspended，而沒有手勢的 resume() 可能永遠不 resolve。
+   * 一旦 await 過就不算手勢了，所以呼叫端一定要在點擊處理的第一段同步呼叫。
+   * ⚠️ 呼叫端會在**每一次**手勢都呼叫它（包括每次送出問題），所以實作不可以開計費 session。
+   * 冪等，不丟例外。
+   */
+  unlockAudio?(): void;
+
+  /**
+   * 串流中的增量文字。現在每一個 driver 都等整段答案才開口，所以都直接忽略它——
    * 理由寫在 speakableAnswer 的註解裡。
    */
   push(delta: string): void;
 
-  /** 串流結束，傳入**完整**答案。逐句朗讀的 driver 此時只需把殘句唸完。 */
+  /**
+   * 串流結束，傳入**完整**答案（呼叫端已經套過 speakableAnswer）。
+   * 每一個 driver 都從這裡才開口；已經沒有逐句朗讀的 driver 了。
+   */
   finish(fullText: string): void;
 
   /** 立刻閉嘴，但保留 session。冪等。 */
@@ -126,8 +153,8 @@ export interface AvatarDriver {
  * 在那之前的都已經在瀏覽器裡了）。畫面上使用者看到的是被截斷的半句＋婉拒，
  * 但如果我們照著整段唸，就會把「系統事後判定為不該說」的那段唸出去。
  *
- * 今天那是合成音，還只是尷尬；換成老師本人的臉和聲音之後，
- * 那就是**她的臉、她的聲音，說出一句系統認定她不該說的話**。
+ * 以前 /chat 用裝置語音念的時候那還只是尷尬；現在全站（包括 /chat 的朗讀）都是老師本人的
+ * 克隆聲，那就是**她的臉、她的聲音，說出一句系統認定她不該說的話**。
  *
  * 所以規則很簡單：結尾是 GUARDED_REPLY 就只講 GUARDED_REPLY。
  */

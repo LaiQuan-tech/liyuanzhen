@@ -166,7 +166,8 @@ npm run smoke:chat    # 端到端，含 8 題對抗題
 「乾淨地婉拒」比「答對史實」更能決定它能不能上線。
 
 人工驗收請見 `/Users/aimand/.claude/plans/swift-percolating-yeti.md` 的驗收章節，
-特別是：Safari 要單獨測、簡報用的那台機器要確認有 `zh-TW` 語音、
+特別是：Safari 要單獨測、iPhone 要在靜音鍵開著時實測一次文字版朗讀
+（2026-09-29 起朗讀改用老師的克隆聲走 `/api/tts`，不再依賴裝置的 `zh-TW` 語音）、
 以及預錄一段操作影片備用。
 
 ---

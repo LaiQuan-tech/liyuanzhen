@@ -44,6 +44,16 @@ export interface AvatarStageHandle {
    * 自動連線請不要帶 unmute，見 AvatarStage 的 autoStart 說明。
    */
   prepare(options?: { unmute?: boolean }): Promise<void>;
+  /**
+   * 只解鎖這一頁的音訊輸出（monogram 的 AudioContext），不開任何計費 session。
+   *
+   * 🔴 必須在點擊處理的**第一段同步**呼叫，任何 await 之前。/chat 在「開啟朗讀」與
+   * 每一次送出問題都呼叫它：朗讀要等整段答案出來才開口，那時早就離開手勢了，
+   * AudioContext 只能在這兩下點擊的當下開起來或 resume。
+   *
+   * 可選：ChibiStage（/live4）也實作 AvatarStageHandle，它自己在 prepare({ unmute }) 裡 prime。
+   */
+  unlockAudio?(): void;
   push(delta: string): void;
   finish(fullText: string): void;
   stop(): void;
@@ -321,12 +331,13 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
       setProvider(driver.provider);
 
       if (driver.metered) {
-        // 串流虛擬人自己帶聲音，跟這台裝置有沒有裝中文語音無關——
+        // 串流虛擬人自己帶聲音（跟著 <video> 走），跟這個瀏覽器能不能放 Web Audio 無關——
         // 所以不用等 prepare（那要手勢）就能確定朗讀按鈕該顯示
         availableCb.current?.(true);
       } else {
-        // monogram 不計費也不需要手勢，直接備好；
-        // 它的可用性**取決於裝置**（沒有中文語音就是 false），必須問過才知道
+        // monogram 不計費，prepare 不需要手勢（它刻意不在這裡碰 AudioContext，
+        // 那要等 unlockAudio）；它的可用性**取決於瀏覽器**（沒有 Web Audio 就是 false），
+        // 必須問過才知道
         await driver.prepare(null);
         if (!unmountedRef.current) availableCb.current?.(driver.audioAvailable);
       }
@@ -390,6 +401,13 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
           console.warn("[avatar] 自動播放被擋，需要使用者再點一次");
         });
       }
+      // 🔴 語音頁的備援就靠這一行出聲。heygen 載入失敗時 createAvatarDriver 會降級成
+      // monogram（克隆聲走 Web Audio，不走 <video>），它的 AudioContext 只能在手勢裡解鎖——
+      // 而語音頁唯一的手勢就是說話按鈕：LiveStage.press() 同步呼叫 prepare({ unmute: true })。
+      // 答案要等錄音、辨識、生成全跑完才到，那時早就離開手勢了，少了這行備援就是啞的。
+      // 帶 unmute 才做，理由同上：沒帶代表呼叫端不在手勢裡（autoStart）。
+      // heygen／mock 沒有實作 unlockAudio，這行對它們是 no-op。
+      driverRef.current?.unlockAudio?.();
     }
 
     // 正在備就不要再備一次。少了它就有 double-spend race。
@@ -521,6 +539,8 @@ const AvatarStage = forwardRef<AvatarStageHandle, Props>(function AvatarStage(
         driver.finish(fullText);
       },
       stop: () => driverRef.current?.stop(),
+      // 同步轉給 driver，中間不可以有 await——見 AvatarStageHandle.unlockAudio
+      unlockAudio: () => driverRef.current?.unlockAudio?.(),
       reportActivity: () => idleRef.current?.reportActivity(),
     }),
     [prepare]

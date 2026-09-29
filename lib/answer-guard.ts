@@ -1514,7 +1514,8 @@ export function groundingCheck(text: string, context: GuardContext): GroundingVe
  * 取捨：
  * - 數位人（/live 系列）本來就在串流結束後才用
  *   `finish(speakableAnswer(full, GUARDED_REPLY))` 開口，時機完全不變。
- *   逐句朗讀的 monogram driver 反而變安全了——它現在也是整段才收到。
+ *   /chat 的朗讀（monogram driver）2026-09-29 起也改成等整段、用老師的克隆聲唸
+ *   speakableAnswer，不再邊收邊逐句念——已經沒有「字一吐出來就唸出去」的 driver 了。
  * - /chat 文字版會從「逐字出現」變成「約 100 字一次出現」，延遲等於生成時間
  *   （1–2 秒）。這是知情的取捨：用打字機效果換一層守門。
  *

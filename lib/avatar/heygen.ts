@@ -1,4 +1,5 @@
 import type { AvatarDriver, AvatarDriverHooks } from "./types";
+import { fetchTtsStream as requestTtsStream } from "./tts-request";
 import { trace } from "@/lib/trace";
 
 /**
@@ -29,9 +30,6 @@ interface TokenResponse {
   reason?: string;
 }
 
-/** 合成端點。回**串流的裸 PCM**（16-bit / 24kHz / 單聲道），不是 JSON。 */
-const TTS_ENDPOINT = "/api/tts";
-
 /**
  * ⚠️ SDK v0.0.18 的缺口：官方 LITE 協定有 `agent.speak_end` 用來標示一段話結束，
  * 但 SDK 的 `CommandEventsEnum` **沒有**這個事件，也沒有對應的方法。
@@ -43,11 +41,6 @@ const TTS_ENDPOINT = "/api/tts";
  * 不影響聲音本身；真的收到 speak_ended 就以事件為準，這條保險會被取消。
  */
 const SPEAK_FALLBACK_GRACE_MS = 2_000;
-
-/** TTS 最多送幾次。見 fetchTtsStream 的說明。 */
-const TTS_ATTEMPTS = 3;
-/** 重試間隔，會乘上第幾次（400ms、800ms）。 */
-const TTS_RETRY_MS = 400;
 
 /**
  * 合成期間的保險上限。這條只在「提前報說話中」到「算出真實音訊長度」之間有效，
@@ -200,39 +193,14 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
    */
 
   /**
-   * 取 TTS 串流，失敗會重試。
+   * 取 TTS 串流，失敗會重試（3 次，間隔 400ms、800ms；4xx 不重試但 429 例外）。
    *
-   * ⚠️ 加重試不是保守起見，是實測需要：正式站上 `/api/tts` 出現過 503，
-   * 而 503 在這支路由只可能來自平台層（我們自己的 not_configured 分支不會忽然成立，
-   * 同一分鐘用 curl 與瀏覽器打都是 200）。那種一次性失敗以前會直接讓整段回答變成無聲。
-   *
-   * ⚠️ 4xx **不重試**——文字太長、格式不對這種錯，送幾次都一樣。
-   * 只有 429 例外，那是「太快了」，等一下就好。
+   * ⚠️ 重試策略的正本在 lib/avatar/tts-request.ts，跟 /chat 朗讀的 monogram driver 共用——
+   * 加重試的理由（正式站出現過平台層的 503）也寫在那裡。這裡只把 `dead` 接上去：
+   * destroy 之後不再等下一次重試。
    */
-  async function fetchTtsStream(text: string): Promise<ReadableStream<Uint8Array>> {
-    let last = "";
-    for (let attempt = 1; attempt <= TTS_ATTEMPTS; attempt++) {
-      let response: Response | null = null;
-      try {
-        response = await fetch(TTS_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-        });
-      } catch (error) {
-        last = `連線失敗：${error instanceof Error ? error.message : String(error)}`;
-      }
-
-      if (response) {
-        if (response.ok && response.body) return response.body;
-        last = `TTS ${response.status}`;
-        if (response.status >= 400 && response.status < 500 && response.status !== 429) break;
-      }
-
-      if (dead || attempt === TTS_ATTEMPTS) break;
-      await new Promise((resolve) => setTimeout(resolve, TTS_RETRY_MS * attempt));
-    }
-    throw new Error(last || "TTS 失敗");
+  function fetchTtsStream(text: string): Promise<ReadableStream<Uint8Array>> {
+    return requestTtsStream(text, { isCancelled: () => dead });
   }
 
   /**
@@ -296,7 +264,7 @@ export function createHeygenDriver(hooks: AvatarDriverHooks): AvatarDriver {
     metered: true,
     get audioAvailable() {
       // 聲音跟影像走同一條 WebRTC 軌，attach() 之後就有；
-      // 跟 monogram 不同，不存在「這台裝置沒有中文語音」的情況。
+      // 跟 monogram 不同，不需要這個瀏覽器自己有 Web Audio 能放裸 PCM。
       return prepared;
     },
 

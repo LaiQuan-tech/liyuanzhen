@@ -361,3 +361,42 @@ describe("LipSyncPlayer stop 與 onFirstAudio", () => {
     expect(player.currentViseme()).toEqual({ viseme: "closed", level: 0 }); // 第二段只有 100ms
   });
 });
+
+describe("LipSyncPlayer 的唯讀狀態（contextState／pendingSeconds）", () => {
+  /**
+   * 這兩支是給 lib/avatar/monogram.ts（/chat 朗讀）用的：它不在手勢裡才開始播，
+   * 要先確認 context 是 running（suspended 時 play() 會 await 一個可能永遠不回來的 resume()），
+   * 也要知道串流收完之後聲音還要播多久才算講完。只讀，不改任何行為。
+   */
+  it("contextState：還沒開過是 null，prime 之後是 context 的狀態，dispose 之後回到 null", () => {
+    const player = new LipSyncPlayer();
+    expect(player.contextState).toBeNull();
+    player.prime();
+    expect(player.contextState).toBe("running");
+    ctxOf(player).state = "suspended";
+    expect(player.contextState).toBe("suspended");
+    player.dispose();
+    expect(player.contextState).toBeNull();
+  });
+
+  it("pendingSeconds：play() 收完串流時，聲音還有多少秒沒播完（照播放時鐘算）", async () => {
+    const player = new LipSyncPlayer();
+    expect(player.pendingSeconds).toBe(0);
+
+    await player.play(streamOf([rampPcm(24000)])); // 一秒，排在 LEAD 0.08 之後
+    const c = ctxOf(player);
+    expect(player.pendingSeconds).toBeCloseTo(1.08, 5);
+
+    c.currentTime = 0.58;
+    expect(player.pendingSeconds).toBeCloseTo(0.5, 5);
+    c.currentTime = 5;
+    expect(player.pendingSeconds).toBe(0);
+  });
+
+  it("pendingSeconds：stop() 之後是 0（已排的聲音都停了）", async () => {
+    const player = new LipSyncPlayer();
+    await player.play(streamOf([rampPcm(24000)]));
+    player.stop();
+    expect(player.pendingSeconds).toBe(0);
+  });
+});
