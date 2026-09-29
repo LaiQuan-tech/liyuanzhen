@@ -63,6 +63,20 @@ const STREAM_SUFFIX = "/stream";
  */
 const MODEL_ID = "eleven_v3_conversational";
 
+/**
+ * 🔴 2026-09-29：穩定度鎖在 1.0（v3 的 Robust）。
+ *
+ * 使用者回報「有時候聲音不像老師」，附了 /live4 的螢幕錄影：同一次合成、沒有切段，
+ * 念到「我從事婦運、」還是低沉沙啞的老年聲，從「在淡江教書」起突然變成清亮、像三四十歲的聲音。
+ * 同一段 64 字拿去 A/B（音檔給使用者親耳聽過，由他選的）：
+ *   eleven_v3_conversational、不帶 voice_settings（原本的樣子）× 2：一次正常，一次整段被聽成老年男聲
+ *   eleven_v3_conversational、stability 1.0 × 2：兩次都是前後一致的年長女聲
+ *   eleven_multilingual_v2 × 1：一樣中途換音色——所以不是 v3 才有，是這個克隆聲本身帶著兩種音色
+ * 代價：語氣比較平、表情少一點。樣本數小，之後若還聽到換音色，下一步是重做克隆聲（錄音品質要一致），
+ * 不是再調這個值。⚠️ 送出去的 body 由 lib/voice/index.test.ts 鎖住，兩支合成函式都要帶。
+ */
+const VOICE_SETTINGS = { stability: 1.0 } as const;
+
 export interface SynthesisResult {
   /** base64 的 PCM 塊，照順序送 */
   chunks: string[];
@@ -90,7 +104,7 @@ export async function synthesizeStream(text: string): Promise<ReadableStream<Uin
     {
       method: "POST",
       headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ text: fixPronunciation(text), model_id: MODEL_ID }),
+      body: JSON.stringify({ text: fixPronunciation(text), model_id: MODEL_ID, voice_settings: VOICE_SETTINGS }),
     }
   );
 
@@ -113,7 +127,7 @@ export async function synthesize(text: string): Promise<SynthesisResult> {
     {
       method: "POST",
       headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ text: fixPronunciation(text), model_id: MODEL_ID }),
+      body: JSON.stringify({ text: fixPronunciation(text), model_id: MODEL_ID, voice_settings: VOICE_SETTINGS }),
     }
   );
 
