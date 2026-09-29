@@ -1,132 +1,67 @@
 /**
- * AvatarStage 的特性測試治具（characterization harness）。
+ * AvatarStage 的接線測試（wiring test）。
  *
- * ── 為什麼有這支 ──────────────────────────────────────────────
- * components/avatar/AvatarStage.tsx 管語音頁（/live、/live2、/live3）與 /chat 頭像的 driver 生命週期：
- * 接通串流、閒置與上限計時器、切分頁／離開頁面時收線並回報帳本、執行期 onFatal 之後降級成
- * monogram（「李」字＋老師的克隆聲）。這些邏輯全寫在元件裡，而專案的 vitest 是 node 環境、
- * 沒有 jsdom、也沒有 React Testing Library，所以原本完全沒有自動化測試——db896b6 修的降級行為，
- * 把修正還原之後 vitest 照樣全綠。
+ * ── 現在測什麼 ──────────────────────────────────────────────
+ * 只測元件有沒有把 lib/avatar/stage-session.ts 接對：session 每個 mount 只建一次；三個 effect 只轉呼叫
+ * （mount／unmount、visibilitychange 與 pagehide → teardown、autoStart）；imperative handle 同步轉呼叫；
+ * ui 回呼改 state 之後畫面跟著變；callback props 換新函式之後 session 呼叫到的是最新的；providerOverride 原樣傳入。
+ * session 在這裡是假的（vi.mock("@/lib/avatar/stage-session")，只記錄呼叫）。編排本身的測試在：
+ * - lib/avatar/stage-session.test.ts：劇本式假 driver 的單元測試（每一項修正、StrictMode、video 晚到、手勢同步段、同步回報）
+ * - lib/avatar/stage-session.scenarios.test.ts：真的 driver＋假 SDK 跑 S1–S15 情境
  *
- * 這支把 db896b6 當下的行為「釘住」，當作重構的安全網。計畫是把編排「只搬不改寫」地抽到
- * lib/avatar/stage-session.ts，元件變成薄殼：重構期間這支必須一直是綠的，而且**不需要修改**。
- * 要改它才會綠，就代表重構改到了行為——或是治具綁到了內部細節（見最後一節）。
+ * ── 歷史 ────────────────────────────────────────────────────
+ * 到抽出 stage-session 的那個 commit（新增 lib/avatar/stage-session.ts 的那一個）為止，這支是重構用的特性測試安全網：假 React 跑真的元件＋真的 driver＋假 SDK，
+ * S1–S15 把 db896b6 的降級行為釘住，抽 session 的時候一個字都沒改照綠。編排搬出去之後，那些情境改成直接驅動
+ * session（上面兩支），這裡瘦身成只測接線。完整版：
+ *   git show $(git log --diff-filter=A --format=%h -- lib/avatar/stage-session.ts):components/avatar/AvatarStage.harness.test.ts
  *
- * ── 怎麼運作 ──────────────────────────────────────────────────
- * 跑的是真的程式碼：AvatarStage.tsx、lib/avatar（index、fallback、heygen、monogram、mock、
- * lipsync-player、tts-request、speech-*）、lib/idle-timer。換成假的只有邊界：
- * - React：下面一百多行的極小 hooks 實作（fakeReact）。元件函式被直接呼叫，JSX 變成
- *   `{ type, props }` 物件，**子元件不會 render**。
- * - next/dynamic 回傳的 VideoAvatar 換成標記函式 VideoAvatarMock，DigitalAvatar 換成 DigitalAvatarMock。
- *   畫面只從這兩個元素判斷：VideoAvatar 在不在、它的 `visible`（影像就緒）、DigitalAvatar（「李」字）在不在。
- *   render 樹裡一出現 VideoAvatar，就把假的 <video> 塞進它的 `videoRef` prop；它消失就清成 null。
- * - LiveAvatar SDK 換成 FakeSession（start 之後下一個 microtask 就緒；stop 會發 CLIENT_INITIATED 斷線；
- *   sdk.startGate 可以讓 start() 卡住）。token 端點可以用 net.tokenGate 卡住、用 net.token 指定狀態碼。
- *   heygen driver 是真的，只外包一層記下它拿到的 hooks（heygenHooks），用來扮演「違約的 driver」。
- * - 網路換成 fakeFetch；Web Audio 換成 FakeAudioContext（永遠 running，只數開了幾個、排了幾段聲音）；
- *   document／window／navigator 是只有用到的欄位的假物件；lib/trace 收進 `traces` 陣列。
- * - 時間：vi 的假時鐘（setTimeout／setInterval／Date）。dynamic import 與 ReadableStream 需要真的事件迴圈，
- *   所以 flush() 交錯跑真的 setImmediate 與假時鐘；mount() 會先把 driver 模組載好。
- * - vitest.config.ts 的 `oxc: { jsx: { runtime: "automatic" } }` 是給這支用的：tsconfig 是
- *   `jsx: "preserve"`（給 Next），vite 照 tsconfig 就不轉 JSX，.tsx 在測試裡根本解析不了。
- *   開了之後 oxc 產生的是 react/jsx-dev-runtime 的 jsxDEV（vitest 不是 production）；兩個 runtime 都假掉了。
+ * ── 怎麼運作 ─────────────────────────────────────────────────
+ * 下面的極小假 React（fakeReact）直接呼叫元件函式，JSX 變成 `{ type, props }` 物件，子元件不 render。
+ * VideoAvatar（next/dynamic）與 DigitalAvatar 換成標記函式，畫面只看它們在不在、VideoAvatar 的 `visible`。
+ * render 樹裡一出現 VideoAvatar，就把假的 <video> 塞進它的 `videoRef` prop（它消失就清成 null），所以 session 的
+ * getVideo() 讀得到。vitest.config.ts 的 `oxc: { jsx: { runtime: "automatic" } }` 就是為了這支：tsconfig 是
+ * `jsx: "preserve"`（給 Next），不加的話 .tsx 在測試裡解析不了；開了之後產生的是 react/jsx-dev-runtime 的 jsxDEV。
  *
- * 觀察點盡量只用元件的公開介面：props 回呼（onTeardown、onSpeechFailed、onSpeakingChange、
- * onAudioAvailableChange）、imperative handle、render 出來的子元素，以及對外的後果——打了哪些 API、
- * 送去合成的是哪幾則、sendBeacon 回報了什麼、SDK 開了幾個 session、開了幾個 AudioContext。
- * 例外兩處：S2、S5 用 `vi.getTimerCount()` 當「機制（第二道）」斷言，寫成 expect.soft，紅了也會繼續跑到
- * 後面的行為斷言；S2 另外看 debug 面板上的 trace（「畫面切回靜態照片」那一筆），因為降級之後再跑收線，
- * 在 monogram 上唯一看得到的後果就是它。
+ * ── 假 React 的限制（只列跟接線有關的）──────────────────────────
+ * 1. StrictMode 只模擬一半：mount(props, { strict: true }) 會在第一次 commit 之後把 effect 整批拆掉再整批接上
+ *    （跟 React 18 開發模式一樣：先全部 cleanup、再全部重跑；imperative handle 先清成 null 再接回去）。但**沒有**
+ *    雙 render，也不會把 useState 的初始化函式跑兩次——createStageSession 被跑兩次、丟掉一個的情況這裡看不到，
+ *    所以它的建構必須是純的，由 stage-session.test.ts 守。
+ * 2. setState 用 queueMicrotask 觸發重繪，passive effect 在 render 結束時同步跑完；真的 React 18 非事件觸發的更新
+ *    走 Scheduler（下一個巨任務），passive effect 在 paint 之後。依賴這個時序的問題抓不到。
+ * 3. hook 只按呼叫順序配對。這裡多驗了「同一格的種類不能變」與「每次 render 的數量一樣」（條件式呼叫會大聲失敗），
+ *    但不驗 deps 長度改變這類 React 只會警告的事。
+ * 4. next/dynamic 在這裡是同步的：VideoAvatar 一出現在 render 樹裡 videoRef 就有值（<video> 晚到由 stage-session.test.ts 守）。
+ * 5. 沒有 DOM、沒有使用者手勢：visibilitychange／pagehide 由 hide()／show()／leavePage() 直接呼叫掛上的監聽器。
+ *    子元件不 render：浮水印、全身合成的版面、VideoAvatar 內部都不在範圍內。
  *
- * ── 保證不連網 ────────────────────────────────────────────────
- * - 全域 fetch 與 window.fetch 都是 fakeFetch，只認三個路徑：/api/avatar-token、/api/tts、
- *   /api/avatar-session/close。其他任何網址（/api/chat、/api/stt、絕對網址……）一律 throw，
- *   而且記進 net.unexpected，afterEach 斷言它是空的——就算呼叫端把錯誤吞掉，測試也會紅。
- *   這個檔案從頭到尾沒有碰過真的 fetch。
- * - LiveAvatar SDK 是沒有 importOriginal 的 vi.mock：真的 SDK（livekit、WebRTC、WebSocket）不會被載入，
- *   不會開計費 session；token 是 fakeFetch 給的，不經過帳本。
- * - navigator.sendBeacon 是 stub；WebSocket／EventSource／XMLHttpRequest 換成一建構就記錄並 throw 的類別。
- * - 不 import node:fs／node:net／node:http，不寫任何檔案。
- *
- * ── 限制：假 React 跟真的 React 的落差（這些情境它抓不到）──────────
- * 標 ★ 的有實驗佐證（拿掉那段正式碼，這支仍然全綠）。
- * 1. ★ 沒有 StrictMode 的 mount→unmount→mount：effect 只跑一次。拿掉 ensureDriver 開頭的 creatingRef
- *    去重仍全綠。「建構要純、mount 可重入、雙掛載只建一個 driver」要另外守（瀏覽器實測或 stage-session 的單元測試）。
- * 2. ★ next/dynamic 在這裡是同步的，VideoAvatar 一出現在 render 樹裡 videoRef 就有值；真的要等 chunk 載完、
- *    元件掛上（「video 晚到」）。拿掉 autoStart 的輪詢（等 <video> 出現那段）或 prepare 的
- *    「沒有 video 就不開 session」護欄，仍全綠。
- * 3. ★ 沒有「使用者手勢」：FakeAudioContext 永遠 running、video.play() 永遠成功、沒有自動播放政策。
- *    把 prepare 的解除靜音／unlockAudio 同步段挪到 preparingRef 早退之後，仍全綠；挪到 await 之後，
- *    只有 S10 會紅（它剛好斷言「沒有在手勢外開 AudioContext」），其餘情境在這裡照樣出聲。
- * 4. setState 用 queueMicrotask 觸發重繪，passive effect 在 render 結束時同步跑完。真的 React 18
- *    非事件觸發的更新走 Scheduler（下一個巨任務），passive effect 在 paint 之後。依賴「重繪落在某個 task
- *    之前還是之後」的時序問題抓不到，也可能因此假紅或假綠。
- * 5. effect 的順序照 React：同一次 commit 先整批 cleanup 再整批 effect；useImperativeHandle 在 passive effect
- *    之前賦值、卸載時清成 null。但沒有 ref callback、ref 物件換新、Suspense、transition 這些東西。
- * 6. hook 只按呼叫順序配對（跟 React 一樣）。這裡多驗了「同一格的 hook 種類不能變」與「每次 render 的
- *    hook 數量要一樣」（條件式呼叫會直接丟錯），但不驗 deps 長度改變這類 React 只會警告的事。
- * 7. props 永遠不變、沒有父層重繪：providerOverride 在執行期改變、callback props 換新函式都測不到。
- * 8. 子元件不 render：浮水印、全身合成（fullBody）的版面、VideoAvatar 內部行為都不在範圍內。
- * 9. 用真的 heygen.ts ＋ FakeSession：綁著 SDK 的事件名、LITE 模式、token 回應格式
- *    （sessionToken／maxSessionSeconds／sessionId）。SDK 升版改了這些，治具不會知道。
- * 10. press() 寫死 LiveStage.press 的同步順序（reportActivity → prepare({ unmute: true })）；
- *    /chat 的「開啟朗讀」是只呼叫 prepare()，寫在 S12。/api/stt、/api/chat 不在這裡，答案直接 finish()。
- *    呼叫端改了順序，治具不會跟著變。
- * 11. flush() 的 turn 數（前 10、後 20）是留的餘裕：2026-09-30 量過，現行碼兩邊都設 0（只靠
- *    advanceTimersByTimeAsync）也全綠。正式碼多了很多層 await、某條測試因為「該發生的事還沒發生」而紅，
- *    先把這兩個數字調大確認。
- *
- * ── 元件加了新 hook 時 ────────────────────────────────────────
- * - 還是 useRef／useState／useCallback／useEffect／useImperativeHandle：不用改，照呼叫順序自動配對。
- * - 用到 fakeReact 沒有的（useMemo、useLayoutEffect、useReducer、useContext、useSyncExternalStore、useId…）：
- *   **每一條測試都會失敗**（元件一 render 就碰到），訊息是 vitest 的 `No "useMemo" export is defined on the "react" mock`（實測過）。
- *   去下面的 fakeReact 照既有的樣子補一個（useMemo 可以照 useCallback 存 factory() 的結果；useLayoutEffect
- *   放進 R.layout 那一批），並在 HookSlot 加一種 kind。fakeReact 整包就是 vi.mock("react") 的內容，不用改別處。
+ * ── 元件加了新 hook 時 ─────────────────────────────────────────
+ * - 還是 useRef／useState／useEffect／useImperativeHandle：不用改，照呼叫順序自動配對。
+ * - 用到 fakeReact 沒有的（useMemo、useLayoutEffect、useReducer、useContext、useSyncExternalStore、useId…）：每一條測試
+ *   都會失敗，訊息是 vitest 的 `No "useMemo" export is defined on the "react" mock`。去下面的 fakeReact 照既有的樣子補一個
+ *   （useMemo 可以照 useCallback 存 factory() 的結果；useLayoutEffect 放進 R.layout 那一批），並在 HookSlot 加一種 kind。
+ *   fakeReact 整包就是 vi.mock("react") 的內容，不用改別處。
  * - 條件式呼叫 hook：claimSlot 會丟「第 N 個 hook 上一次 render 是 X，這一次是 Y」。重繪跑在 microtask 裡，
- *   所以它會以 vitest 的 Unhandled Error 出現、整輪判定失敗（實測過）。真的 React 也會壞，先修元件。
- * - 新的 import 帶進瀏覽器 API 或新的網址：假物件缺欄位會 TypeError、fakeFetch 會記錄並 throw——都是大聲失敗。
- *   要補就補進對應的假物件，**不可以**放行到真的網路。
+ *   所以它會以 vitest 的 Unhandled Error 出現、整輪判定失敗。真的 React 也會壞，先修元件。
  *
- * ── 什麼時候改治具、什麼時候懷疑治具 ─────────────────────────
- * - 該改測試：元件的行為**有意**改變（commit 裡寫清楚為什麼），改對應的斷言；SDK 升版（改 FakeSession）。
- * - 不該改測試：重構（例如抽 stage-session）期間變紅。那代表行為變了，先查正式碼，不要改斷言遷就它。
- * - 該懷疑治具：紅的原因是時序（多一層 await 就紅、調大 flush 的 turn 數就好）；單獨跑綠、一起跑紅
- *   （beforeEach 漏了重設新的模組狀態）。反過來，這裡全綠而瀏覽器上壞掉，多半是上面列的限制：
- *   用 mock driver 在本機瀏覽器重現（NEXT_PUBLIC_AVATAR_PROVIDER=mock、`/live?mockFatal=prepare|speak`，
- *   見 lib/avatar/mock.ts），不要在這裡補一條永遠綠的測試。
- *
- * ── db896b6 的每一項修正由誰守（只還原那一項時會紅的測試）──────────
- * 2026-09-30 實測：複製整個專案到 repo 外，每次從乾淨的 AvatarStage.tsx 只逐字還原一項修正，跑這支。
- *   還原的修正                                                  會紅的測試
- *   degradedRef（onFatal 之後同一個 mount 鎖定 monogram）           S1 S2 S7 S10 S13
- *   onFatal 整段換回舊版                                          S1 S2 S7 S13 S14
- *   onFatal ① 過期／destroy 之後的回報不理（shouldHandleFatal）       S13 S14
- *   onFatal ② 停掉閒置與上限計時器、閒置 ref 清成 null                 S2
- *   onFatal ③ 同步回報 session 結束                                S2
- *   onFatal ⑥ 立刻建好 monogram                                   S1 S2 S7 S13
- *   prepare 回來時 driver 已被換掉就不動畫面、不開計時器（isCurrentDriver） S4 S8
- *   teardown 把閒置 ref 清成 null                                  S5（機制）S11 S12
- *   整支換回 db896b6^                                  S1 S2 S4 S5 S7 S8 S10 S11 S12 S13 S14
- * S3、S6、S9、S15 守的是 db896b6 以前就有的行為，上面每一列都綠是正常的。
- *
- * ── S10 ──────────────────────────────────────────────────────
- * 舊版治具的 S10 沒有斷言，只把數字寫到檔案。現在依 AvatarStage onFatal ⑥ 與 lib/avatar/index.ts
- * preloadMonogram 的註解斷言：按鍵落在「monogram 還沒建好」的縫裡，那一題沒有聲音但要明講一次、
- * 不打 /api/tts、不在手勢外開 AudioContext；下一次按就恢復。理由寫在 S10 裡。
- *
- * ── 重構時會碰到的地方（治具綁到的細節）───────────────────────
- * - vi.mock 的模組：react、react/jsx-*-runtime、next/dynamic、DigitalAvatar、lib/trace、SDK、lib/avatar/heygen。
- *   vi.mock 認的是解析後的檔案，所以 stage-session.ts 換個寫法 import 同一個檔案也吃得到。
- * - mount() 預載的模組清單：新程式碼若在接通途中 dynamic import 別的模組，要加進去，否則要等真的 I/O。
- * - S2 看 trace 標籤「畫面切回靜態照片」；S2、S5 看 vi.getTimerCount()。搬的時候字串不能改、不能多開常駐計時器。
- * - S13、S14 經 heygenHooks 直接呼叫 driver 拿到的 onFatal。stage-session 把 hooks 包一層沒關係，
- *   只要交給 createAvatarDriver 的那一份就是處理 onFatal 的那一份。
+ * ── 不連網 ──────────────────────────────────────────────────
+ * 這支裡面沒有任何東西應該連網（session 是假的、driver 根本不會被載入）。installNetworkTraps() 仍然把 fetch 換成陷阱、
+ * WebSocket／EventSource／XMLHttpRequest 一建構就 throw，afterEach 斷言沒有任何預期外的連網
+ * （見 lib/avatar/stage-session.fixtures.ts）。不 import node:fs／node:net／node:http，不寫任何檔案。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import type AvatarStageComponent from "@/components/avatar/AvatarStage";
 import type { AvatarStageHandle } from "@/components/avatar/AvatarStage";
-import type { AvatarDriverHooks } from "@/lib/avatar";
+import type { StageSession, StageSessionOptions } from "@/lib/avatar/stage-session";
+import {
+  FAKE_TIMERS,
+  createFakeVideo,
+  expectNoUnexpectedNetwork,
+  flush,
+  installNetworkTraps,
+  resetNet,
+} from "@/lib/avatar/stage-session.fixtures";
 
 // vi.mock 會被提到檔案最上面，但工廠函式要等第一次 import 那個模組（mount() 裡）才執行，
 // 那時下面的變數都已經初始化了，所以工廠可以直接引用它們。
@@ -142,19 +77,20 @@ type HookSlot =
   | { kind: "useRef"; ref: RefObject<unknown> }
   | { kind: "useState"; value: unknown; set: (next: unknown) => void }
   | { kind: "useCallback"; fn: unknown; deps: Deps }
-  | { kind: "useEffect"; deps: Deps; cleanup: (() => void) | undefined }
-  | { kind: "useImperativeHandle"; deps: Deps; target: RefObject<unknown> | null };
+  | { kind: "useEffect"; deps: Deps; body: EffectBody; cleanup: (() => void) | undefined }
+  | { kind: "useImperativeHandle"; deps: Deps; target: RefObject<unknown> | null; create: () => unknown };
 type SlotOf<K extends HookSlot["kind"]> = Extract<HookSlot, { kind: K }>;
 
-/** 目前掛著的那一個元件（治具一次只掛一個） */
+/** 目前掛著的那一個元件（一次只掛一個） */
 const R = {
   slots: [] as HookSlot[],
   cursor: 0,
   /** 這次 commit 要跑的 layout 階段工作（useImperativeHandle） */
   layout: [] as Array<() => void>,
   /** 這次 commit 要（重）跑的 passive effect */
-  passive: [] as Array<{ slot: SlotOf<"useEffect">; body: EffectBody }>,
+  passive: [] as Array<SlotOf<"useEffect">>,
   scheduled: false,
+  renders: 0,
   render: null as null | (() => void),
 };
 
@@ -231,10 +167,16 @@ const fakeReact = {
     return slot.fn as F;
   },
   useEffect(body: EffectBody, deps?: readonly unknown[]): void {
-    const { slot, fresh } = claimSlot("useEffect", () => ({ kind: "useEffect", deps, cleanup: undefined }));
+    const { slot, fresh } = claimSlot("useEffect", () => ({
+      kind: "useEffect",
+      deps,
+      body,
+      cleanup: undefined,
+    }));
     if (fresh || depsChanged(slot.deps, deps)) {
       slot.deps = deps;
-      R.passive.push({ slot, body });
+      slot.body = body;
+      R.passive.push(slot);
     }
   },
   useImperativeHandle<T>(
@@ -247,10 +189,12 @@ const fakeReact = {
       kind: "useImperativeHandle",
       deps,
       target: ref,
+      create,
     }));
     if (fresh || depsChanged(slot.deps, deps)) {
       slot.deps = deps;
       slot.target = ref;
+      slot.create = create;
       R.layout.push(() => {
         if (ref) ref.current = create();
       });
@@ -265,19 +209,19 @@ function commit(): void {
   R.passive = [];
   for (const run of layout) run();
   // 跟 React 一樣：同一次 commit 先把要重跑的 effect 全部 cleanup，再依序跑新的 effect
-  for (const { slot } of passive) {
+  for (const slot of passive) {
     const cleanup = slot.cleanup;
     slot.cleanup = undefined;
     cleanup?.();
   }
-  for (const { slot, body } of passive) {
-    const cleanup = body();
+  for (const slot of passive) {
+    const cleanup = slot.body();
     slot.cleanup = typeof cleanup === "function" ? cleanup : undefined;
   }
 }
 
-function unmountRoot(): void {
-  R.render = null;
+/** 把所有 effect 拆掉：imperative handle 清成 null、passive effect 的 cleanup 全部跑一遍 */
+function detachEffects(): void {
   for (const slot of R.slots) {
     if (slot.kind === "useImperativeHandle" && slot.target) slot.target.current = null;
   }
@@ -287,6 +231,24 @@ function unmountRoot(): void {
     slot.cleanup = undefined;
     cleanup?.();
   }
+}
+
+/** StrictMode 開發模式的 effect 重播：整批拆掉，再整批接上（沒有雙 render，見檔頭限制 1） */
+function replayEffectsForStrictMode(): void {
+  detachEffects();
+  for (const slot of R.slots) {
+    if (slot.kind === "useImperativeHandle" && slot.target) slot.target.current = slot.create();
+  }
+  for (const slot of R.slots) {
+    if (slot.kind !== "useEffect") continue;
+    const cleanup = slot.body();
+    slot.cleanup = typeof cleanup === "function" ? cleanup : undefined;
+  }
+}
+
+function unmountRoot(): void {
+  R.render = null;
+  detachEffects();
 }
 
 interface FakeElement {
@@ -303,7 +265,7 @@ vi.mock("react", () => ({ ...fakeReact, default: fakeReact }));
 vi.mock("react/jsx-runtime", () => ({ jsx: createElement, jsxs: createElement, Fragment: FRAGMENT }));
 vi.mock("react/jsx-dev-runtime", () => ({ jsxDEV: createElement, Fragment: FRAGMENT }));
 
-// ── 子元件與 trace ───────────────────────────────────────────────
+// ── 子元件 ───────────────────────────────────────────────────────
 function VideoAvatarMock(): null {
   return null;
 }
@@ -313,212 +275,60 @@ function DigitalAvatarMock(): null {
 vi.mock("next/dynamic", () => ({ default: () => VideoAvatarMock }));
 vi.mock("@/components/avatar/DigitalAvatar", () => ({ default: DigitalAvatarMock }));
 
-/** 每一筆是 `標籤` 或 `標籤｜細節`（debug 面板上看到的就是這些） */
-const traces: string[] = [];
-vi.mock("@/lib/trace", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/trace")>()),
-  trace: (label: string, detail?: string) => {
-    traces.push(detail ? `${label}｜${detail}` : label);
-  },
-}));
-
-// ── 假 LiveAvatar SDK ────────────────────────────────────────────
-type SdkListener = (arg?: unknown) => void;
-const sdk = {
-  /** new LiveAvatarSession 的次數 */
-  sessions: 0,
-  /** 最後一個 session 掛的事件（emit 只送到它） */
-  listeners: new Map<string, SdkListener>(),
-  log: [] as string[],
-  /** 不是 null 時 start() 會卡在這裡（模擬接通卡住） */
-  startGate: null as Promise<void> | null,
-  emit(event: string, arg?: unknown): void {
-    sdk.listeners.get(event)?.(arg);
-  },
-};
-class FakeSession {
-  readonly mode = "LITE";
-  constructor() {
-    sdk.sessions += 1;
-    sdk.listeners = new Map();
-  }
-  on(event: string, cb: SdkListener): void {
-    sdk.listeners.set(event, cb);
-  }
-  once(event: string, cb: SdkListener): void {
-    sdk.listeners.set(event, cb);
-  }
-  async start(): Promise<void> {
-    sdk.log.push("start");
-    if (sdk.startGate) await sdk.startGate;
-    queueMicrotask(() => sdk.emit("session_stream_ready"));
-  }
-  attach(): void {
-    sdk.log.push("attach");
-  }
-  interrupt(): void {
-    sdk.log.push("interrupt");
-  }
-  repeat(): void {}
-  repeatAudio(): void {
-    sdk.log.push("repeatAudio");
-  }
-  async stop(): Promise<void> {
-    sdk.log.push("session.stop");
-    sdk.emit("session_disconnected", "CLIENT_INITIATED");
-  }
+// ── 假 session：只記錄呼叫 ─────────────────────────────────────────
+interface SessionCall {
+  method: keyof StageSession;
+  args: unknown[];
 }
-vi.mock("@heygen/liveavatar-web-sdk", () => ({
-  LiveAvatarSession: FakeSession,
-  SessionEvent: { SESSION_STREAM_READY: "session_stream_ready", SESSION_DISCONNECTED: "session_disconnected" },
-  AgentEventsEnum: { AVATAR_SPEAK_STARTED: "avatar_speak_started", AVATAR_SPEAK_ENDED: "avatar_speak_ended" },
-}));
+interface FakeStageSession {
+  /** 元件交給 createStageSession 的東西 */
+  options: StageSessionOptions;
+  calls: SessionCall[];
+  /** prepare 回傳的就是這一個（驗「回傳值原樣」） */
+  prepareResult: Promise<void>;
+  /** autoStart 回傳的取消函式被呼叫了幾次 */
+  autoStartCancels: number;
+}
+const sessions: FakeStageSession[] = [];
 
-/**
- * 每一個 heygen driver 拿到的 hooks，依建立順序。
- * driver 本身是真的；記下 hooks 是為了模擬「違反 onFatal 契約的 driver」（S13、S14）：
- * 真的 heygen 由 heygen.ts 的 fatalReported／dead 保證「最多報一次、destroy 之後不報」，
- * 元件那一層的守衛（shouldHandleFatal）只有違約的 driver 才碰得到。
- */
-const heygenHooks: AvatarDriverHooks[] = [];
-vi.mock("@/lib/avatar/heygen", async (importOriginal) => {
-  const real = await importOriginal<typeof import("@/lib/avatar/heygen")>();
+function createFakeSession(options: StageSessionOptions): StageSession {
+  const record: FakeStageSession = {
+    options,
+    calls: [],
+    prepareResult: Promise.resolve(),
+    autoStartCancels: 0,
+  };
+  sessions.push(record);
+  const call = (method: keyof StageSession, args: unknown[]) => {
+    record.calls.push({ method, args });
+  };
   return {
-    ...real,
-    createHeygenDriver: (hooks: AvatarDriverHooks) => {
-      heygenHooks.push(hooks);
-      return real.createHeygenDriver(hooks);
+    mount: () => call("mount", []),
+    unmount: () => call("unmount", []),
+    teardown: (why) => {
+      call("teardown", [why]);
+      return Promise.resolve();
     },
-  };
-});
-
-// ── 假 Web Audio（monogram 的 LipSyncPlayer 用）────────────────────
-class FakeAudioContext {
-  /** 開過幾個 AudioContext（monogram 只在 unlockAudio，也就是手勢裡才開） */
-  static count = 0;
-  /** 排進播放圖的聲音段數 */
-  static scheduled = 0;
-  state: AudioContextState = "running";
-  currentTime = 0;
-  readonly destination = {};
-  constructor() {
-    FakeAudioContext.count += 1;
-  }
-  resume(): Promise<void> {
-    return Promise.resolve();
-  }
-  close(): Promise<void> {
-    this.state = "closed";
-    return Promise.resolve();
-  }
-  createBuffer(_channels: number, length: number, sampleRate: number) {
-    const data = new Float32Array(length);
-    return { duration: length / sampleRate, length, sampleRate, getChannelData: () => data };
-  }
-  createBufferSource() {
-    return {
-      buffer: null as unknown,
-      onended: null as null | (() => void),
-      connect() {},
-      disconnect() {},
-      stop() {},
-      start() {
-        FakeAudioContext.scheduled += 1;
-      },
-    };
-  }
-}
-
-// ── 假網路 ───────────────────────────────────────────────────────
-const SESSION_CLOSE = "/api/avatar-session/close";
-const net = {
-  /** 每次 /api/avatar-token 的狀態碼（依序取用）；空的就是 200 */
-  token: [] as number[],
-  /** 不是 null 時 /api/avatar-token 會等它（模擬連線中） */
-  tokenGate: null as Promise<void> | null,
-  tokenRequests: 0,
-  /** 送去 /api/tts 的每一則文字（合成一次＝花一次 ElevenLabs 額度） */
-  tts: [] as string[],
-  /** 「session 結束」回報被呼叫的次數。呼叫的當下就 +1，用來驗「同步、在任何 await 之前」 */
-  closeCalls: 0,
-  /** 回報的內容（sendBeacon 的 Blob 要 await 才讀得到，所以要 flush 之後再看） */
-  closeBodies: [] as string[],
-  /** 不該發生的連網嘗試。afterEach 會斷言它是空的 */
-  unexpected: [] as string[],
-};
-function pcmResponse(): Response {
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(48_000)); // 24 kHz 16-bit 單聲道 → 1 秒
-        controller.close();
-      },
-    }),
-    { status: 200 }
-  );
-}
-function requestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
-  return input.url;
-}
-async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const url = requestUrl(input);
-  if (url === "/api/avatar-token") {
-    net.tokenRequests += 1;
-    const n = net.tokenRequests;
-    if (net.tokenGate) await net.tokenGate;
-    const status = net.token.shift() ?? 200;
-    if (status !== 200) return new Response(JSON.stringify({ reason: "budget_exhausted" }), { status });
-    return new Response(
-      JSON.stringify({ sessionToken: `token-${n}`, maxSessionSeconds: 180, sessionId: `sess-${n}` }),
-      { status: 200 }
-    );
-  }
-  if (url === "/api/tts") {
-    // body 的形狀跟 app/api/tts/route.ts 一致：`{ text: string }`。對不上就記下來（呼叫端會把錯誤吞成「沒聲音」）
-    let text: unknown;
-    try {
-      text = (JSON.parse(String(init?.body)) as { text?: unknown }).text;
-    } catch {
-      text = undefined;
-    }
-    if (typeof text !== "string") {
-      net.unexpected.push(`/api/tts 的 body 不是 { text }：${String(init?.body)}`);
-      throw new Error("治具：/api/tts 的 body 形狀變了");
-    }
-    net.tts.push(text);
-    return pcmResponse();
-  }
-  if (url === SESSION_CLOSE) {
-    // sendBeacon 失敗時的退路（這裡的 sendBeacon 不會失敗，走到這裡代表元件改了回報方式）
-    net.closeCalls += 1;
-    net.closeBodies.push(String(init?.body));
-    return new Response("{}", { status: 200 });
-  }
-  net.unexpected.push(`fetch ${url}`);
-  throw new Error(`治具不連網：沒有預期到的請求 ${url}`);
-}
-function fakeSendBeacon(url: string | URL, data?: BodyInit | null): boolean {
-  const target = String(url);
-  if (target !== SESSION_CLOSE) {
-    net.unexpected.push(`sendBeacon ${target}`);
-    return false;
-  }
-  net.closeCalls += 1;
-  if (data instanceof Blob) void data.text().then((text) => net.closeBodies.push(text));
-  else net.closeBodies.push(String(data));
-  return true;
-}
-/** WebSocket／EventSource／XMLHttpRequest：一建構就記錄並 throw */
-function forbidden(name: string) {
-  return class {
-    constructor(target?: unknown) {
-      net.unexpected.push(`${name} ${String(target)}`);
-      throw new Error(`治具不連網：${name}`);
-    }
+    autoStart: () => {
+      call("autoStart", []);
+      return () => {
+        record.autoStartCancels += 1;
+      };
+    },
+    prepare: (prepareOptions) => {
+      call("prepare", [prepareOptions]);
+      return record.prepareResult;
+    },
+    unlockAudio: () => call("unlockAudio", []),
+    push: (delta) => call("push", [delta]),
+    finish: (fullText) => call("finish", [fullText]),
+    stop: () => call("stop", []),
+    reportActivity: () => call("reportActivity", []),
   };
 }
+vi.mock("@/lib/avatar/stage-session", () => ({ createStageSession: createFakeSession }));
+
+const methods = (session: FakeStageSession) => session.calls.map((c) => c.method);
 
 // ── 假 DOM ───────────────────────────────────────────────────────
 type Listener = () => void;
@@ -541,7 +351,7 @@ const fakeDocument = {
   addEventListener: (type: string, fn: Listener) => listen(docListeners, type, fn),
   removeEventListener: (type: string, fn: Listener) => void docListeners.get(type)?.delete(fn),
 };
-const fakeVideo = { muted: true, poster: "", play: () => Promise.resolve() };
+const fakeVideo = createFakeVideo();
 
 function hide(): void {
   fakeDocument.visibilityState = "hidden";
@@ -553,6 +363,9 @@ function show(): void {
 }
 function leavePage(): void {
   dispatch(winListeners, "pagehide");
+}
+function listenerCount(): number {
+  return (docListeners.get("visibilitychange")?.size ?? 0) + (winListeners.get("pagehide")?.size ?? 0);
 }
 
 // ── 掛載 ─────────────────────────────────────────────────────────
@@ -578,35 +391,16 @@ function findByType(node: unknown, type: unknown): FakeElement | null {
   return findByType(node.props.children, type);
 }
 
-async function mount(overrides: Partial<StageProps>) {
-  // 先把 driver 模組載好：元件裡的 dynamic import 要真的事件迴圈才會完成，假時鐘推不動
-  await import("@/lib/avatar/heygen");
-  await import("@/lib/avatar/monogram");
-  await import("@/lib/avatar/mock");
-  await import("@heygen/liveavatar-web-sdk");
+async function mount(overrides: Partial<StageProps>, options: { strict?: boolean } = {}) {
   const { default: AvatarStage } = await import("@/components/avatar/AvatarStage");
   // 型別上它是真 React 的 ForwardRefExoticComponent；假 forwardRef 直接回傳 render 函式本身，
   // 所以執行期拿到的就是 (props, ref) => 元素樹。整個檔案只有這一個跨越型別的轉換。
   const renderStage = AvatarStage as unknown as RenderStage;
-
   const handle: RefObject<AvatarStageHandle | null> = { current: null };
-  const calls = {
-    speaking: [] as boolean[],
-    audioAvailable: [] as boolean[],
-    teardown: 0,
-    speechFailed: 0,
-  };
   const props: StageProps = {
     state: "idle",
     size: "full",
-    onSpeakingChange: (speaking) => calls.speaking.push(speaking),
-    onAudioAvailableChange: (available) => calls.audioAvailable.push(available),
-    onTeardown: () => {
-      calls.teardown += 1;
-    },
-    onSpeechFailed: () => {
-      calls.speechFailed += 1;
-    },
+    onSpeakingChange: () => {},
     ...overrides,
   };
 
@@ -615,11 +409,12 @@ async function mount(overrides: Partial<StageProps>) {
     R.cursor = 0;
     R.layout = [];
     R.passive = [];
+    R.renders += 1;
     tree = renderStage(props, handle);
     if (isUpdate && R.cursor !== R.slots.length) {
       throw new Error(`假 React：這次 render 呼叫了 ${R.cursor} 個 hook，上一次是 ${R.slots.length} 個。`);
     }
-    // 模擬 VideoAvatar 掛上／卸下 <video>（真的要等 chunk 載完，見檔頭限制 2）
+    // 模擬 VideoAvatar 掛上／卸下 <video>
     const video = findByType(tree, VideoAvatarMock);
     if (video) {
       const ref = video.props.videoRef as RefObject<unknown>;
@@ -631,60 +426,36 @@ async function mount(overrides: Partial<StageProps>) {
     commit();
   };
   R.render();
+  if (options.strict) replayEffectsForStrictMode();
 
-  const stage = (): AvatarStageHandle => {
-    if (!handle.current) throw new Error("imperative handle 還沒掛上（或已經卸載）");
-    return handle.current;
+  return {
+    handle,
+    stage: (): AvatarStageHandle => {
+      if (!handle.current) throw new Error("imperative handle 還沒掛上（或已經卸載）");
+      return handle.current;
+    },
+    /** 這個 mount 的（假）session */
+    session: (): FakeStageSession => {
+      const last = sessions.at(-1);
+      if (!last) throw new Error("元件沒有建 session");
+      return last;
+    },
+    view: () => {
+      const video = findByType(tree, VideoAvatarMock);
+      return {
+        video: video !== null,
+        videoVisible: video?.props.visible === true,
+        monogram: findByType(tree, DigitalAvatarMock) !== null,
+      };
+    },
+    /** 父層用新的 props 重繪 */
+    rerender: (next: Partial<StageProps>) => {
+      Object.assign(props, next);
+      R.render?.();
+    },
+    unmount: unmountRoot,
   };
-  const view = () => {
-    const video = findByType(tree, VideoAvatarMock);
-    return {
-      /** VideoAvatar 在 render 樹裡（provider 需要影像） */
-      video: video !== null,
-      /** 影像就緒、淡入（VideoAvatar 的 visible） */
-      videoVisible: video?.props.visible === true,
-      /** 「李」字（DigitalAvatar）在畫面上 */
-      monogram: findByType(tree, DigitalAvatarMock) !== null,
-    };
-  };
-  return { stage, calls, view, unmount: unmountRoot };
 }
-
-/** 前後各跑幾輪「真的事件迴圈一格＋假時鐘推 0 毫秒」。經驗值，見檔頭限制 11。 */
-const TURNS_BEFORE = 10;
-const TURNS_AFTER = 20;
-const realTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
-async function settle(turns: number): Promise<void> {
-  for (let i = 0; i < turns; i++) {
-    await realTurn();
-    await vi.advanceTimersByTimeAsync(0);
-  }
-}
-/** 讓非同步的事跑完，再把假時鐘往前推 ms 毫秒，再讓後續的事跑完 */
-async function flush(ms = 0): Promise<void> {
-  await settle(TURNS_BEFORE);
-  await vi.advanceTimersByTimeAsync(ms);
-  await settle(TURNS_AFTER);
-}
-
-/**
- * LiveStage.press 的同步段：reportActivity → prepare({ unmute: true })，中間沒有 await。
- * （她正在講話時 LiveStage 會在兩者之間 stop()；需要的測試自己呼叫。）
- */
-function press(stage: AvatarStageHandle): void {
-  stage.reportActivity();
-  void stage.prepare({ unmute: true });
-}
-
-function gate(): { promise: Promise<void>; release: () => void } {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { promise, release };
-}
-
-const TEARDOWN_TRACE = "畫面切回靜態照片";
 
 beforeEach(() => {
   vi.resetModules();
@@ -693,44 +464,22 @@ beforeEach(() => {
   R.layout = [];
   R.passive = [];
   R.scheduled = false;
+  R.renders = 0;
   R.render = null;
   tree = null;
   videoRefSeen = null;
-  traces.length = 0;
-  heygenHooks.length = 0;
-  sdk.sessions = 0;
-  sdk.log = [];
-  sdk.listeners = new Map();
-  sdk.startGate = null;
-  net.token = [];
-  net.tokenGate = null;
-  net.tokenRequests = 0;
-  net.tts = [];
-  net.closeCalls = 0;
-  net.closeBodies = [];
-  net.unexpected = [];
-  FakeAudioContext.count = 0;
-  FakeAudioContext.scheduled = 0;
+  sessions.length = 0;
+  resetNet();
   docListeners.clear();
   winListeners.clear();
   fakeDocument.visibilityState = "visible";
-  fakeVideo.muted = true;
-  fakeVideo.poster = "";
 
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  vi.useFakeTimers({ toFake: FAKE_TIMERS });
   // 不吃開發者機器上的設定：沒指定 provider 的頁面（/chat）一律照正式站的預設（monogram）
   vi.stubEnv("NEXT_PUBLIC_AVATAR_PROVIDER", undefined);
-  vi.stubGlobal("fetch", fakeFetch);
-  vi.stubGlobal("WebSocket", forbidden("WebSocket"));
-  vi.stubGlobal("EventSource", forbidden("EventSource"));
-  vi.stubGlobal("XMLHttpRequest", forbidden("XMLHttpRequest"));
+  installNetworkTraps();
   vi.stubGlobal("document", fakeDocument);
-  vi.stubGlobal("navigator", { sendBeacon: fakeSendBeacon });
   vi.stubGlobal("window", {
-    AudioContext: FakeAudioContext,
-    fetch: fakeFetch,
-    ReadableStream,
-    location: { search: "" },
     addEventListener: (type: string, fn: Listener) => listen(winListeners, type, fn),
     removeEventListener: (type: string, fn: Listener) => void winListeners.get(type)?.delete(fn),
   });
@@ -741,364 +490,172 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
-  expect(net.unexpected, "治具攔到沒有預期的連網嘗試").toEqual([]);
+  expectNoUnexpectedNetwork();
 });
 
-// ── 情境 ─────────────────────────────────────────────────────────
-const LIVE = { provider: "heygen", autoStart: true, poster: "/p.jpg" } as const;
+const LIVE: Partial<StageProps> = { provider: "heygen", autoStart: true, poster: "/p.jpg" };
 
-describe("AvatarStage（真實程式碼）＋假 React／假 SDK／假網路", () => {
-  it("S1 autoStart 時 token 被拒：畫面換「李」字；按說話之後答案由 monogram 出聲；之後不再要 token", async () => {
-    net.token = [503];
-    const { stage, calls, view } = await mount(LIVE);
-    await flush(200);
-    expect(net.tokenRequests).toBe(1);
-    expect(view()).toMatchObject({ video: false, monogram: true });
-    expect(calls.speechFailed).toBe(0);
-    expect(net.closeCalls).toBe(0); // token 被拒就沒有 session id，沒有東西要回報
-
-    // 降級之後、按說話之前到的答案：放不出聲音（沒有手勢解鎖），要明講，也不白打 /api/tts
-    stage().finish("按之前的答案。");
+describe("AvatarStage 接線（假 session）", () => {
+  it("(a) session 一個 mount 只建一次：setVideoReady、setProvider、父層換 props 觸發的重繪都不會重建", async () => {
+    const { session, rerender } = await mount(LIVE);
+    expect(sessions).toHaveLength(1);
+    session().options.ui.setVideoReady(true);
     await flush();
-    expect(calls.speechFailed).toBe(1);
-    expect(net.tts).toEqual([]);
-
-    for (let round = 0; round < 3; round++) {
-      press(stage());
-      await flush(3000); // 錄音＋辨識＋生成
-      stage().finish(`第 ${round} 題的答案。`);
-      await flush(5000);
-    }
-    expect(net.tts).toEqual(["第 0 題的答案。", "第 1 題的答案。", "第 2 題的答案。"]);
-    expect(FakeAudioContext.scheduled).toBeGreaterThanOrEqual(3);
-    expect(calls.speechFailed).toBe(1);
-    expect(net.tokenRequests).toBe(1);
-    expect(sdk.sessions).toBe(0);
-
-    // 切分頁：monogram 沒有 teardown，也不會回頭去要 token
-    hide();
-    press(stage());
-    await flush(200_000);
-    expect(net.tokenRequests).toBe(1);
-    expect(calls.teardown).toBe(0);
+    session().options.ui.setProvider("monogram");
+    await flush();
+    rerender({ state: "speaking" });
+    expect(R.renders).toBeGreaterThanOrEqual(4);
+    expect(sessions).toHaveLength(1);
+    // 重繪也不可以重跑掛載 effect：它的 cleanup 是 session.unmount()，會把正在用的 driver destroy 掉
+    expect(methods(session())).toEqual(["mount", "autoStart"]);
   });
 
-  it("S2 講到一半斷線：speechFailed 一次、同步回報 session 結束、之後都是 monogram；閒置與上限計時器一起停，之後不再收線", async () => {
-    const { stage, calls, view } = await mount(LIVE);
-    await flush(200);
-    expect(sdk.log).toContain("attach");
-    expect(view().videoVisible).toBe(true);
-
-    press(stage());
-    await flush(3000);
-    stage().finish("講到一半的答案。");
-    await flush(0);
-    expect(calls.speaking.at(-1)).toBe(true);
-
-    sdk.emit("session_disconnected", "UNKNOWN_REASON");
-    // 🔴 回報要在斷線的當下、任何 await 之前送出（onFatal ③）
-    expect(net.closeCalls).toBe(1);
-    await flush(0);
-    expect(calls.speechFailed).toBe(1);
-    expect(calls.speaking.at(-1)).toBe(false);
-    expect(view()).toMatchObject({ video: false, monogram: true });
-    expect(net.closeBodies.join()).toContain("sess-1");
-    // 機制（第二道，soft：紅了也繼續跑到下面的行為斷言）：降級的這一刻不可以還有待觸發的計時器
-    // （閒置、上限都要停，onFatal ②）
-    expect.soft(vi.getTimerCount(), "降級之後還有待觸發的計時器").toBe(0);
-
-    const degradedAt = traces.length;
-    await flush(80_000); // 斷線前最後一次活動 +75 秒：舊的閒置計時器還在的話，這裡會觸發
-    expect(calls.teardown).toBe(0);
-    press(stage());
-    await flush(3000);
-    stage().finish("斷線之後的答案。");
-    await flush(5000);
-    await flush(100_000); // 接通 +178 秒：舊的上限計時器還在的話，這裡會觸發
-    // 行為：降級之後不可以再跑收線。它對 monogram 什麼都不做，唯一的痕跡是一筆「畫面切回靜態照片」——
-    // 臉早就沒了，這筆假紀錄會把看 debug 面板查問題的人帶錯方向。
-    expect(traces.slice(degradedAt).filter((t) => t.startsWith(TEARDOWN_TRACE))).toEqual([]);
-    expect(calls.teardown).toBe(0);
-    expect(net.tokenRequests).toBe(1);
-    expect(sdk.sessions).toBe(1);
-    expect(calls.speechFailed).toBe(1);
-    expect(net.tts).toEqual(["講到一半的答案。", "斷線之後的答案。"]);
-    expect(FakeAudioContext.scheduled).toBeGreaterThanOrEqual(1);
-  });
-
-  it("S3 切分頁 teardown：同步回報 session 結束、收掉串流；下一次按說話照舊重建 heygen（既有行為）", async () => {
-    const { stage, calls, view } = await mount(LIVE);
-    await flush(200);
-    expect(sdk.sessions).toBe(1);
-    hide();
-    // 🔴 同步：切走的當下就送，不等 destroy（分頁隨時會被凍結）
-    expect(net.closeCalls).toBe(1);
-    await flush(0);
-    expect(calls.teardown).toBe(1);
-    expect(sdk.log).toContain("session.stop");
-    expect(net.closeBodies.join()).toContain("sess-1");
-    show();
-    press(stage());
-    await flush(200);
-    expect(net.tokenRequests).toBe(2);
-    expect(sdk.sessions).toBe(2);
-    expect(view()).toMatchObject({ video: true, videoVisible: true, monogram: false });
-  });
-
-  it("S4 接通途中被收掉（切分頁）：舊的 prepare 回來之後不開計時器、不標影像就緒", async () => {
-    const token = gate();
-    net.tokenGate = token.promise;
-    const { stage, calls, view } = await mount(LIVE);
-    await flush(200);
-    expect(net.tokenRequests).toBe(1);
-    hide(); // 接通途中
-    await flush(0);
-    expect(calls.teardown).toBe(1);
-    token.release();
-    await flush(0);
-    expect(view().videoVisible).toBe(false);
-    // 舊版：這裡會開 75 秒閒置＋上限計時器，到點把之後新開的 session 收掉
-    net.tokenGate = null;
-    show();
-    await flush(10_000);
-    press(stage()); // 新的 session 在 +10 秒接上
-    await flush(200);
-    expect(sdk.log.filter((x) => x === "attach")).toHaveLength(1);
-    await flush(70_000); // 距離第一次（被收掉的）prepare 約 80 秒、距離新 session 約 70 秒
-    expect(calls.teardown).toBe(1);
-  });
-
-  it("S5 teardown 之後的 reportActivity 不可以把停掉的閒置計時器叫回來；新 session 的閒置從它接通那一刻算", async () => {
-    const { stage, calls } = await mount(LIVE);
-    await flush(200);
-    hide();
-    await flush(0);
-    expect(calls.teardown).toBe(1);
-    show();
-    // 機制（第二道，soft）：沒有 session 的時候，reportActivity 不可以生出任何計時器。
-    // 這一條的「行為」後果只在接通途中才看得到（S11、S12）：接通完成時 prepare 會先收掉舊的計時器再開新的，
-    // 所以下面這段正常速度的重接，就算計時器被叫回來了也照樣全綠。
-    const timers = vi.getTimerCount();
-    stage().reportActivity();
-    expect.soft(vi.getTimerCount(), "teardown 之後 reportActivity 叫回了計時器").toBe(timers);
-
-    const token = gate();
-    net.tokenGate = token.promise;
-    press(stage()); // reportActivity 在 prepare 之前
-    await flush(10_000);
-    token.release(); // 新 session 在 +10 秒才接上 → 它自己的閒置是 +85 秒
-    await flush(200);
-    await flush(70_000); // +80 秒
-    expect(calls.teardown).toBe(1);
-    await flush(10_000); // +90 秒：新 session 自己的閒置到點
-    expect(calls.teardown).toBe(2);
-  });
-
-  it("S6 /chat（沒指定 provider、不 autoStart）：monogram、不要 token、朗讀出聲、朗讀按鈕可用", async () => {
-    const { stage, calls, view } = await mount({ size: "sm" });
-    await flush(200);
-    expect(view()).toMatchObject({ video: false, monogram: true });
-    expect(calls.audioAvailable.at(-1)).toBe(true);
-    // ChatPanel「開啟朗讀」：unlockAudio → prepare()
-    stage().unlockAudio?.();
-    void stage().prepare();
-    await flush(0);
-    stage().finish("文字對談的答案。");
-    await flush(5000);
-    expect(net.tokenRequests).toBe(0);
-    expect(sdk.sessions).toBe(0);
-    expect(net.tts).toEqual(["文字對談的答案。"]);
-    expect(calls.speechFailed).toBe(0);
-  });
-
-  it("S7 連線中答案在排隊、token 被拒：speechFailed 恰一次、降級後不補說那一則；下一次按之後正常出聲", async () => {
-    const token = gate();
-    net.tokenGate = token.promise;
-    net.token = [503];
-    const { stage, calls, view } = await mount(LIVE);
-    await flush(200);
-    press(stage());
-    await flush(3000);
-    stage().finish("連線中到的答案。");
-    await flush(0);
-    token.release();
-    await flush(200);
-    expect(calls.speechFailed).toBe(1);
-    expect(view()).toMatchObject({ video: false, monogram: true });
-    await flush(10_000);
-    expect(net.tts).toEqual([]);
-    press(stage());
-    await flush(3000);
-    stage().finish("下一題。");
-    await flush(5000);
-    expect(net.tts).toEqual(["下一題。"]);
-    expect(calls.speechFailed).toBe(1);
-    expect(net.tokenRequests).toBe(1);
-  });
-
-  it("S8 切分頁收掉之後 token 才被拒（prepare 在 destroy 之後失敗）：不降級，下一次按照舊重建 heygen", async () => {
-    const token = gate();
-    net.tokenGate = token.promise;
-    net.token = [503];
-    const { stage, calls, view } = await mount(LIVE);
-    await flush(200);
-    hide();
-    await flush(0);
-    token.release();
-    await flush(200);
-    expect(view()).toMatchObject({ video: true, monogram: false });
-    net.tokenGate = null;
-    show();
-    press(stage());
-    await flush(200);
-    expect(net.tokenRequests).toBe(2);
-    expect(sdk.sessions).toBe(1);
-    expect(view()).toMatchObject({ video: true, videoVisible: true });
-    expect(calls.speechFailed).toBe(0);
-  });
-
-  it("S9 卸載時計時器還在：到點不可以丟錯、不可以回報 teardown", async () => {
-    const { calls, unmount } = await mount(LIVE);
-    await flush(200);
-    expect(sdk.log).toContain("attach");
+  it("(b) 掛載呼叫 session.mount()、卸載呼叫 session.unmount()；卸載時 handle 清成 null；沒開 autoStart 就不啟動", async () => {
+    const { session, handle, unmount } = await mount({ provider: "heygen", poster: "/p.jpg" });
+    expect(methods(session())).toEqual(["mount"]);
+    expect(handle.current).not.toBeNull();
     unmount();
-    await flush(0);
-    expect(sdk.log).toContain("session.stop");
-    await flush(200_000);
-    expect(calls.teardown).toBe(0);
-    // ⚠️ 卸載只 destroy、不回報 session 結束（既有行為，範圍外的已知缺口）。故意不斷言，
-    // 修掉的時候在這裡補「closeCalls 是 1」。
+    expect(methods(session())).toEqual(["mount", "unmount"]);
+    expect(handle.current).toBeNull();
   });
 
-  it("S10 斷線之後、monogram 還沒建好就按說話：那一題沒聲音但要明講一次，不在手勢外開 AudioContext；下一次按就恢復", async () => {
-    // 真的瀏覽器裡，建 heygen 時 preloadMonogram 已經把 monogram 的 chunk 載好，onFatal 之後
-    // monogram 在同一個 task 的 microtask 裡就進了 driverRef，之後才輪得到 click（lib/avatar/index.ts）。
-    // 這道縫只剩「預載還沒完就斷線」（網路差的時候，也正是最容易斷線的時候）。治具推不慢 chunk，
-    // 所以用「同一個 task 裡按下去」代表「按鍵落在 monogram 建好之前」。
-    const { stage, calls } = await mount(LIVE);
-    await flush(200);
-    sdk.emit("session_disconnected", "UNKNOWN_REASON"); // 閒置時斷線 → onFatal → 開始建 monogram
-    press(stage()); // driverRef 還是 null：手勢裡的 unlockAudio 落空
-    await flush(3000);
-    stage().finish("這一題的答案。");
-    await flush(5000);
-    // 依 onFatal ⑥：降級之後、被手勢解鎖之前到的答案放不出聲音，由 monogram 回報 onSpeechFailed（恰一次）；
-    // 放不出來就不打 /api/tts；🔴 也不可以為了補救在手勢外開 AudioContext（suspended、resume 可能永遠不回來）
-    expect(calls.speechFailed).toBe(1);
-    expect(net.tts).toEqual([]);
-    expect(FakeAudioContext.count).toBe(0);
-
-    press(stage()); // 這一次 monogram 已經在了：手勢裡解鎖
-    await flush(3000);
-    stage().finish("再下一題。");
-    await flush(5000);
-    expect(net.tts).toEqual(["再下一題。"]);
-    expect(FakeAudioContext.count).toBe(1);
-    expect(FakeAudioContext.scheduled).toBeGreaterThanOrEqual(1);
-    expect(calls.speechFailed).toBe(1);
-    expect(net.tokenRequests).toBe(1);
-    expect(sdk.sessions).toBe(1);
-  });
-
-  it("S11 切分頁回來按說話、接通卡住超過 75 秒：接通途中不可以被閒置計時器收掉（閒置從接通那一刻才算）", async () => {
-    // LiveStage.press 先 reportActivity 再 prepare。teardown 停掉的閒置計時器要是還掛在 ref 上，
-    // 這一下會把它叫回來（75 秒後到點）；接通完成時 prepare 會先收掉舊的再開新的，所以只有
-    // 「接通還沒完成就到點」會出事：它把正在接的 session 收掉、onTeardown 讓頁面重設對話。
-    const { stage, calls, view } = await mount(LIVE);
-    await flush(200);
+  it("(c) StrictMode 式 effect 重播（mount→cleanup→mount）：session 仍只有一個；mount 與 autoStart 各重播一次、監聽器不重複、handle 照樣接上", async () => {
+    const { session, stage } = await mount(LIVE, { strict: true });
+    expect(sessions).toHaveLength(1);
+    expect(methods(session())).toEqual(["mount", "autoStart", "unmount", "mount", "autoStart"]);
+    expect(session().autoStartCancels).toBe(1);
+    expect(listenerCount()).toBe(2);
     hide();
-    await flush(0);
-    expect(calls.teardown).toBe(1);
-    show();
-    stage().finish("切回來才到的答案。"); // 上一輪的答案現在才到：沒有 driver，明講沒聲音（也是一次活動）
-    expect(calls.speechFailed).toBe(1);
-    await flush(1000);
-
-    const start = gate();
-    sdk.startGate = start.promise; // LiveAvatar 的 start() 卡住
-    press(stage());
-    await flush(76_000); // 按下 +76 秒：還在接
-    expect(calls.teardown).toBe(1);
-    start.release();
-    await flush(200);
-    expect(view()).toMatchObject({ video: true, videoVisible: true });
-    expect(sdk.log.filter((x) => x === "attach")).toHaveLength(2);
-    await flush(76_000); // 接通 +76 秒：新 session 自己的閒置到點（照常）
-    expect(calls.teardown).toBe(2);
+    expect(session().calls.filter((c) => c.method === "teardown")).toHaveLength(1);
+    const p = stage().prepare({ unmute: true });
+    expect(p).toBe(session().prepareResult);
   });
 
-  it("S12 呼叫端只呼叫 prepare()、前面沒有 reportActivity：切分頁後有過活動，72 秒後重接、接通要 5 秒——接通途中不可以被收掉", async () => {
-    // 跟 S11 同一條規則，換一種呼叫順序。ChatPanel 的「開啟朗讀」就是只呼叫 unlockAudio → prepare()
-    // （/chat 正式站是 monogram 不計費，設成 heygen／mock 才走得到收線這條路；但這是 handle 的契約，跟誰呼叫無關）。
-    // 復活的閒置計時器照「最後一次活動」算，所以接通的那幾秒內就可能到點。
-    const { stage, calls, view } = await mount(LIVE);
-    await flush(200);
+  it("(d) visibilitychange 變 hidden → teardown(\"切到背景分頁\")；變回 visible 不動；pagehide → teardown(\"離開頁面\")", async () => {
+    const { session } = await mount(LIVE);
     hide();
-    await flush(0);
-    expect(calls.teardown).toBe(1);
+    expect(session().calls.at(-1)).toEqual({ method: "teardown", args: ["切到背景分頁"] });
+    const count = session().calls.length;
     show();
-    stage().push("切回來之後");
-    stage().finish("切回來之後的答案。"); // 活動（push／finish 都會 reportActivity）；沒有 driver，明講沒聲音
-    expect(calls.speechFailed).toBe(1);
-    await flush(72_000);
-
-    const token = gate();
-    net.tokenGate = token.promise;
-    stage().unlockAudio?.();
-    void stage().prepare(); // 不先 reportActivity
-    await flush(5_000); // 距離上一次活動 +77 秒：還在接
-    expect(calls.teardown).toBe(1);
-    token.release();
-    await flush(200);
-    expect(view()).toMatchObject({ video: true, videoVisible: true });
-    expect(sdk.log.filter((x) => x === "attach")).toHaveLength(2);
-  });
-
-  it("S13 違約的 driver 在 monogram 接手之後又報一次 fatal：當成過期回報不理，已經被手勢解鎖的老師聲音照常出聲", async () => {
-    const { stage, calls } = await mount(LIVE);
-    await flush(200);
-    sdk.emit("session_disconnected", "UNKNOWN_REASON"); // 第一次（合法的）回報 → 降級，monogram 接手
-    await flush(0);
-    press(stage()); // 手勢解鎖 monogram
-    await flush(1000); // 錄音中……
-    expect(heygenHooks).toHaveLength(1);
-    heygenHooks[0].onFatal(new Error("同一個 heygen driver 遲到的第二次回報"));
-    await flush(2000);
-    stage().finish("這一題的答案。");
-    await flush(5000);
-    // 沒守住的話：正在用的 monogram 被當成失效的 driver 收掉、換一個沒解鎖的——這一題沒聲音
-    expect(net.tts).toEqual(["這一題的答案。"]);
-    expect(calls.speechFailed).toBe(0);
-    expect(FakeAudioContext.count).toBe(1);
-    expect(net.tokenRequests).toBe(1);
-  });
-
-  it("S14 違約的 driver 在被收掉（切分頁 destroy）之後才報 fatal：不可以降級；下一次按照舊重建 heygen", async () => {
-    const { stage, calls, view } = await mount(LIVE);
-    await flush(200);
-    hide();
-    await flush(0);
-    expect(calls.teardown).toBe(1);
-    expect(heygenHooks).toHaveLength(1);
-    heygenHooks[0].onFatal(new Error("destroy 之後才報"));
-    await flush(0);
-    expect(view()).toMatchObject({ video: true, monogram: false }); // 畫面沒有換成「李」字
-    show();
-    press(stage());
-    await flush(200);
-    expect(net.tokenRequests).toBe(2);
-    expect(view()).toMatchObject({ video: true, videoVisible: true, monogram: false });
-  });
-
-  it("S15 離開頁面（pagehide）：當下同步送出 session 結束，接著收掉串流", async () => {
-    const { calls } = await mount(LIVE);
-    await flush(200);
+    expect(session().calls).toHaveLength(count);
     leavePage();
-    // 🔴 分頁隨時會被殺掉：回報一定要在第一個 await 之前送出
-    expect(net.closeCalls).toBe(1);
-    await flush(0);
-    expect(net.closeBodies.join()).toContain("sess-1");
-    expect(sdk.log).toContain("session.stop");
-    expect(calls.teardown).toBe(1);
+    expect(session().calls.at(-1)).toEqual({ method: "teardown", args: ["離開頁面"] });
+  });
+
+  it("(d) 只在需要影像時監聽：換成 monogram 之後移除，卸載時也移除", async () => {
+    const first = await mount(LIVE);
+    expect(listenerCount()).toBe(2);
+    first.session().options.ui.setProvider("monogram");
+    await flush();
+    expect(listenerCount()).toBe(0);
+    const count = first.session().calls.length;
+    hide();
+    leavePage();
+    expect(first.session().calls).toHaveLength(count);
+    first.session().options.ui.setProvider("heygen");
+    await flush();
+    expect(listenerCount()).toBe(2);
+    first.unmount();
+    expect(listenerCount()).toBe(0);
+  });
+
+  it("(d) monogram 頁面（/chat：沒指定 provider）從頭就不監聽", async () => {
+    const { session } = await mount({ size: "sm" });
+    expect(listenerCount()).toBe(0);
+    hide();
+    leavePage();
+    expect(methods(session())).toEqual(["mount"]);
+  });
+
+  it("(e) handle 每個方法都同步轉給 session：參數、回傳值原樣；prepare 在 return 之前就已經呼叫到；handle 一個 mount 內不換", async () => {
+    const { session, stage, handle } = await mount(LIVE);
+    const first = handle.current;
+
+    const result = stage().prepare({ unmute: true });
+    expect(session().calls.at(-1)).toEqual({ method: "prepare", args: [{ unmute: true }] });
+    expect(result).toBe(session().prepareResult);
+    void stage().prepare();
+    expect(session().calls.at(-1)).toEqual({ method: "prepare", args: [undefined] });
+
+    expect(stage().push("半")).toBeUndefined();
+    expect(session().calls.at(-1)).toEqual({ method: "push", args: ["半"] });
+    expect(stage().finish("整段")).toBeUndefined();
+    expect(session().calls.at(-1)).toEqual({ method: "finish", args: ["整段"] });
+    expect(stage().stop()).toBeUndefined();
+    expect(session().calls.at(-1)).toEqual({ method: "stop", args: [] });
+    expect(stage().unlockAudio?.()).toBeUndefined();
+    expect(session().calls.at(-1)).toEqual({ method: "unlockAudio", args: [] });
+    expect(stage().reportActivity()).toBeUndefined();
+    expect(session().calls.at(-1)).toEqual({ method: "reportActivity", args: [] });
+
+    // 見 stage-session.ts 檔頭差異 ③：videoReady 變了也不換 handle
+    session().options.ui.setVideoReady(true);
+    await flush();
+    expect(handle.current).toBe(first);
+  });
+
+  it("(f) ui 回呼改 state → 畫面跟著變；getVideo 讀的是 VideoAvatar 的 videoRef", async () => {
+    const { session, view } = await mount(LIVE);
+    expect(view()).toEqual({ video: true, videoVisible: false, monogram: false });
+    expect(session().options.getVideo()).toBe(fakeVideo);
+
+    session().options.ui.setVideoReady(true);
+    await flush();
+    expect(view()).toEqual({ video: true, videoVisible: true, monogram: false });
+
+    session().options.ui.setVideoReady(false);
+    session().options.ui.setProvider("monogram");
+    await flush();
+    expect(view()).toEqual({ video: false, videoVisible: false, monogram: true });
+    expect(session().options.getVideo()).toBeNull();
+  });
+
+  it("(g) callback props 換成新函式之後，session 呼叫到的是最新那個", async () => {
+    const seen: string[] = [];
+    const { session, rerender } = await mount({
+      ...LIVE,
+      onSpeakingChange: (speaking) => seen.push(`舊 speaking ${speaking}`),
+      onAudioAvailableChange: (available) => seen.push(`舊 available ${available}`),
+      onTeardown: () => seen.push("舊 teardown"),
+      onSpeechFailed: () => seen.push("舊 speechFailed"),
+    });
+    const callbacks = session().options.callbacks;
+    rerender({
+      onSpeakingChange: (speaking) => seen.push(`新 speaking ${speaking}`),
+      onAudioAvailableChange: (available) => seen.push(`新 available ${available}`),
+      onTeardown: () => seen.push("新 teardown"),
+      onSpeechFailed: () => seen.push("新 speechFailed"),
+    });
+    callbacks.onSpeakingChange(true);
+    callbacks.onAudioAvailableChange?.(false);
+    callbacks.onTeardown?.();
+    callbacks.onSpeechFailed?.();
+    expect(seen).toEqual(["新 speaking true", "新 available false", "新 teardown", "新 speechFailed"]);
+    expect(sessions).toHaveLength(1);
+  });
+
+  it("(h) autoStart：一個 mount 只啟動一次（重繪不重來），卸載時取消", async () => {
+    const { session, rerender, unmount } = await mount(LIVE);
+    expect(methods(session()).filter((m) => m === "autoStart")).toHaveLength(1);
+    session().options.ui.setVideoReady(true);
+    await flush();
+    rerender({ state: "thinking" });
+    expect(methods(session()).filter((m) => m === "autoStart")).toHaveLength(1);
+    expect(session().autoStartCancels).toBe(0);
+    unmount();
+    expect(session().autoStartCancels).toBe(1);
+  });
+
+  it("(i) providerOverride 原樣傳入；正式碼不注入 createDriver；畫面初值照它", async () => {
+    const { session, view } = await mount({ provider: "heygen", poster: "/p.jpg" });
+    expect(session().options.providerOverride).toBe("heygen");
+    expect(session().options.createDriver).toBeUndefined();
+    expect(view()).toMatchObject({ video: true, monogram: false });
+  });
+
+  it("(i) 沒指定 provider（/chat）：傳 undefined，畫面初值照 resolveProvider（正式站是 monogram）", async () => {
+    const { session, view } = await mount({ size: "sm" });
+    expect(session().options.providerOverride).toBeUndefined();
+    expect(view()).toMatchObject({ video: false, monogram: true });
   });
 });

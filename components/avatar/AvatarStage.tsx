@@ -26,8 +26,9 @@ import { FullBodyStage, STAGE_MASK, type Pose } from "./full-body-stage";
  * 4. imperative handle 同步轉給 session（prepare 的手勢同步段要在 handle.prepare() return 之前做完）
  * 跟抽出來之前的語意差異列在 stage-session.ts 的檔頭。
  *
- * 測試：components/avatar/AvatarStage.harness.test.ts（假 React 跑真的元件＋真的 session＋真的 driver；
- * 抽 session 之前寫的特性測試，這次重構一個字都沒改照綠）。
+ * 測試：這個元件的接線在 components/avatar/AvatarStage.harness.test.ts（假 React＋假 session）；
+ * 編排的行為在 lib/avatar/stage-session.test.ts（劇本式假 driver）與 lib/avatar/stage-session.scenarios.test.ts
+ * （真的 driver 跑 S1–S15）。抽 session 的那一次，接線測試還是完整的特性測試、一個字都沒改照綠（完整版在新增 lib/avatar/stage-session.ts 的那個 commit，見治具檔頭）。
  */
 
 /**

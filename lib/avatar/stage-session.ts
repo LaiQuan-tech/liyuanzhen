@@ -30,7 +30,9 @@ import { trace } from "@/lib/trace";
  *    元件版讀的是 prepare 這個 useCallback 閉包裡、上一次 render 的 videoReady：從 setVideoReady 到重繪提交
  *    （handle 換成新的 prepare）之間，它是舊值。現在 setVideoReady 的當下就更新，比原本即時。
  *    那個空窗裡進來的 prepare()，元件版會多跑一輪（接通後：重排閒置與上限計時器；teardown 後：誤以為還備著而不重建），
- *    現在不會。空窗只有一次重繪那麼長，點擊與 autoStart 都落不進去。
+ *    現在不會。空窗只有一次重繪那麼長：autoStart 落不進去；點擊很少見但落得進去——setVideoReady 發生在
+ *    promise 或計時器裡（接通回來、閒置／上限收線）時，React 18 另排一個任務重繪，已經排隊的點擊可以搶在它前面。
+ *    閒置／上限收線後剛好在那一下按說話，元件版那一下等於沒按（建了 driver 卻早退），現在會正常接通。
  * ② providerOverride 在一個 session 的生命週期內固定（建構時讀一次）。元件版的 ensureDriver 把它放在 useCallback
  *    的 deps 裡，頁面在 mount 期間換了 provider，會讓掛載 effect 重跑（destroy 舊的、照新的建）；現在不會。
  *    目前的呼叫端都是常數（LiveStage 的 LIVE_PROVIDER；ChatPanel 不帶），行為不變。
@@ -38,8 +40,11 @@ import { trace } from "@/lib/trace";
  *    呼叫端（LiveStage、ChatPanel）都是當下讀 stageRef.current 再呼叫，看不到差別。
  * 其他都一樣：同一套 await、同一個時點讀 <video>、同一個時點回報帳本、同一組計時器、同一批 trace。
  *
- * 測試：components/avatar/AvatarStage.harness.test.ts——抽出這個模組之前寫的特性測試（假 React 跑真的元件＋
- * 真的 driver），這次重構一個字都沒改照綠。
+ * 測試：
+ * - ./stage-session.test.ts：劇本式假 driver 的單元測試（每一項修正、StrictMode、<video> 晚到、手勢同步段、同步回報）
+ * - ./stage-session.scenarios.test.ts：真的 driver＋假 SDK 跑 S1–S15 情境（從舊治具原樣移植）
+ * - components/avatar/AvatarStage.harness.test.ts：元件的接線（session 是假的）。抽出這個模組的時候它還是完整的
+ *   特性測試，一個字都沒改照綠（完整版在新增這個檔案的那個 commit：git log --diff-filter=A -- lib/avatar/stage-session.ts）
  */
 
 /** 多久沒互動就收掉串流。太短會在使用者讀答案時斷掉，太長就是在燒錢。 */
@@ -503,6 +508,8 @@ export function createStageSession(options: StageSessionOptions): StageSession {
         setVideoReady(true);
         // 照理這時候不會有舊的計時器（teardown 與 onFatal 都清掉了）；真有的話先收掉再換，
         // 直接蓋掉 ref 會讓舊的變成孤兒，到點把這個新的 session 收掉
+        // （元件版只有 videoReady 閉包的舊值空窗能讓這一段跑第二次；session 讀自己的 videoReadyRef 之後走不到，
+        // 這兩行只剩防呆，所以 stage-session.test.ts 沒有獨立測它。）
         idleRef.current?.stop();
         if (capRef.current) clearTimeout(capRef.current);
         idleRef.current = createIdleTimer(IDLE_MS, () => void teardown("閒置逾時"));
@@ -540,6 +547,10 @@ export function createStageSession(options: StageSessionOptions): StageSession {
       unmountedRef.current = false;
       void ensureDriver();
     },
+    // ⚠️ 跟元件版的 cleanup 一樣只 destroy：不停計時器、不把 videoReady 標回 false、不回報 session 結束（已知缺口，另案）。
+    // 所以接通「之後」才發生的 unmount→mount（React 18 只有 StrictMode 會重播，而且只在第一次掛載、還沒接通的時候），
+    // 重新 mount 之後 prepare 會以為還備著而早退，舊的計時器到點再收掉新建的 driver。現在的 React 18 走不到，
+    // 換到會保留 state 卸載再掛回的機制（例如 Activity）之前要先處理。
     unmount() {
       unmountedRef.current = true;
       const driver = driverRef.current;
