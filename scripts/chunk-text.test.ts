@@ -250,8 +250,7 @@ describe("哨兵：排除區的句子不可以進切塊結果與索引", () => {
     "看著姊姊拿著拐杖慢慢走路", // 10 元晶專文：拐杖
     "我發現她消瘦了很多", // 04 黃瓊華專文：2022 年的健康
     "元貞的妹妹元晶今天為什麼願意照顧元貞", // 05 劉毓秀專文：現在誰照顧她
-    "10 月因身體狀況需要照顧，搬回新北深坑", // 12 年表 2021
-    "6 月搬至臺北南港", // 12 年表 2022
+    // ⚠️ 年表 2021、2022 兩條原本也在這張表上。2026-09-30 擁有者指示附錄照書收錄，已移到下面「附錄照書收錄」反過來守。
   ];
   const dir = join(process.cwd(), "content", "knowledge");
 
@@ -298,6 +297,37 @@ describe("哨兵：排除區的句子不可以進切塊結果與索引", () => {
       expect(text, `母女那一節出現「${banned}」`).not.toContain(banned);
     }
     expect(text).toContain("女兒近年的生活，是女兒自己的私人生活，這裡不談");
+  });
+
+  /**
+   * 🔴 2026-09-30 擁有者指示：書末附錄一（李元貞年表）、附錄二（臺灣婦女權益進展大事紀）照書收錄，有人問就照實回答。
+   * 年表 2021、2022 兩條原本用 ai:exclude 排除（老師近年的健康照顧與住處），這次拿掉標記。
+   * 這裡守反方向的退化：之後有人照舊例把這兩條（或整份附錄）再標回排除。附錄以外的近況段落照舊排除，上面的哨兵不變。
+   */
+  const APPENDIX_FILES = ["10-autobiography-12.md", "10-autobiography-13.md"];
+  const APPENDIX_MUST_KEEP = [
+    "10 月因身體狀況需要照顧，搬回新北深坑", // 12 年表 2021
+    "6 月搬至臺北南港", // 12 年表 2022
+  ];
+
+  it("附錄照書收錄：年表與大事紀沒有排除區，2021、2022 兩條進了切塊結果", () => {
+    for (const f of APPENDIX_FILES) {
+      expect(stripExcluded(readFileSync(join(dir, f), "utf-8"), f).excluded, `${f} 又有 ai:exclude 排除區`).toEqual([]);
+    }
+    const chunks = APPENDIX_FILES.flatMap((f) =>
+      chunkMarkdown(readFileSync(join(dir, f), "utf-8"), { source: f, sourceUrl: "", docTitle: f }, { fileName: f })
+    )
+      .map((c) => c.content)
+      .join("\n");
+    for (const s of APPENDIX_MUST_KEEP) expect(chunks, `年表「${s}」不在切塊結果裡`).toContain(s);
+  });
+
+  it("附錄照書收錄：索引裡也有 2021、2022 兩條", () => {
+    const index = JSON.parse(readFileSync(join(process.cwd(), "data", "knowledge-index.json"), "utf-8")) as {
+      entries: { content: string }[];
+    };
+    const all = index.entries.map((e) => e.content).join("\n");
+    for (const s of APPENDIX_MUST_KEEP) expect(all, `索引裡沒有「${s}」——用舊語料建的索引？`).toContain(s);
   });
 
   it("索引裡的 01-biography 母女那一節也沒有 2023、2024 年的重逢細節", () => {
