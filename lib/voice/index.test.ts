@@ -28,16 +28,18 @@ describe("ElevenLabs 請求的 voice_settings", () => {
     vi.unstubAllGlobals();
   });
 
-  it("串流版帶 stability 1.0 與原本的模型", async () => {
+  /** 2026-09-30 換成 eleven_v4：v3 的開頭系統性偏低（使用者聽成「太老」），理由見 lib/voice/index.ts 的 MODEL_ID */
+  it("串流版帶 stability 1.0 與 eleven_v4", async () => {
     await synthesizeStream("我在 1982 年和朋友一起辦了《婦女新知》。");
     expect(bodies).toHaveLength(1);
-    expect(bodies[0].model_id).toBe("eleven_v3_conversational");
+    expect(bodies[0].model_id).toBe("eleven_v4");
     expect(bodies[0].voice_settings).toEqual({ stability: 1.0 });
   });
 
-  it("整段版也帶 stability 1.0", async () => {
+  it("整段版也帶 stability 1.0 與 eleven_v4", async () => {
     await synthesize("我在 1982 年和朋友一起辦了《婦女新知》。");
     expect(bodies).toHaveLength(1);
+    expect(bodies[0].model_id).toBe("eleven_v4");
     expect(bodies[0].voice_settings).toEqual({ stability: 1.0 });
   });
 });
