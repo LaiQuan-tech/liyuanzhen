@@ -77,7 +77,8 @@ export async function openSpeechStream(
 
 /**
  * LipSyncPlayer 排完之後再多等多久才算講完。數字與理由同 monogram.ts 的 END_GRACE_MS：
- * 輸出經過 <audio> 元素（iOS 修法），會多 20–60ms 的輸出延遲。
+ * 只有 iOS 的輸出經過 <audio> 元素（iOS 修法），會多 20–60ms 的輸出延遲；其他裝置直接接喇叭，
+ * 但硬體輸出延遲每條路都有，所以寬限不分路徑。
  */
 export const PLAYER_END_GRACE_MS = 250;
 

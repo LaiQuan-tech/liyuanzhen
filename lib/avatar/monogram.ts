@@ -46,7 +46,11 @@ const STALL_TIMEOUT_MS = 20_000;
 
 /**
  * 播放圖排完之後再多等多久才回報「講完了」。
- * LipSyncPlayer 的輸出經過 <audio> 元素（iOS 修法），會多 20–60ms 的輸出延遲；
+ * 喇叭真正出聲比播放時鐘（`pendingSeconds`）晚：只有 iOS 的 LipSyncPlayer 輸出經過 <audio> 元素
+ * （iOS 修法），會多 20–60ms；桌面、Android 從 2026-09-30 起直接接 ctx.destination，沒有這一段
+ * （理由見 lipsync-player.ts 的 mediaDest 註解），但硬體本身的輸出延遲（AudioContext.outputLatency，
+ * 接藍牙耳機時更長）每條路都有。
+ * ⚠️ 所以寬限不分路徑：它是保險、不是精算的補償，桌面不走 <audio> 不代表可以調小。
  * 太早回報的話頭像會在最後一個字還沒出聲時就停下來。
  */
 const END_GRACE_MS = 250;

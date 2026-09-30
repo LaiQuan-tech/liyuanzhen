@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { LipSyncPlayer } from "@/lib/avatar/lipsync-player";
+import {
+  LipSyncPlayer,
+  shouldRouteThroughMediaElement,
+  type MediaRouteEnv,
+} from "@/lib/avatar/lipsync-player";
 
 /**
  * `LipSyncPlayer` 的排程層測試。
@@ -128,6 +132,131 @@ function expectedSamples(pcm: Uint8Array): number[] {
   return out;
 }
 
+// ── 輸出路徑（<audio> 還是直接接喇叭）要用的治具 ─────────────────────
+
+/**
+ * 各裝置 `navigator` 上判斷要看的三個欄位。UA 照各瀏覽器的真實格式寫，版本號不重要。
+ *
+ * ⚠️ 重點是 iPad 那一筆：iPadOS 預設「要求桌面版網站」，UA 跟 Mac Safari **一字不差**，
+ * 只差在 maxTouchPoints（Mac 是 0）。
+ */
+const MAC_SAFARI_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15";
+const MAC_CHROME: MediaRouteEnv = {
+  userAgent:
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+  platform: "MacIntel",
+  maxTouchPoints: 0,
+};
+const MAC_SAFARI: MediaRouteEnv = { userAgent: MAC_SAFARI_UA, platform: "MacIntel", maxTouchPoints: 0 };
+const WINDOWS_CHROME: MediaRouteEnv = {
+  userAgent:
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+  platform: "Win32",
+  maxTouchPoints: 0,
+};
+/** 有觸控螢幕的 Windows 筆電：觸控點很多，但不是 Mac——不可以被當成 iPad */
+const WINDOWS_TOUCH_CHROME: MediaRouteEnv = { ...WINDOWS_CHROME, maxTouchPoints: 10 };
+const ANDROID_CHROME: MediaRouteEnv = {
+  userAgent:
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36",
+  platform: "Linux armv81",
+  maxTouchPoints: 5,
+};
+const IPHONE_SAFARI: MediaRouteEnv = {
+  userAgent:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
+  platform: "iPhone",
+  maxTouchPoints: 5,
+};
+const IPHONE_CHROME: MediaRouteEnv = {
+  userAgent:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0.7339.101 Mobile/15E148 Safari/604.1",
+  platform: "iPhone",
+  maxTouchPoints: 5,
+};
+/** iPadOS 預設的桌面版網站：UA 就是 Mac Safari 那一串 */
+const IPAD_SAFARI_DESKTOP_UA: MediaRouteEnv = { userAgent: MAC_SAFARI_UA, platform: "MacIntel", maxTouchPoints: 5 };
+const IPAD_SAFARI_MOBILE_UA: MediaRouteEnv = {
+  userAgent:
+    "Mozilla/5.0 (iPad; CPU OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
+  platform: "iPad",
+  maxTouchPoints: 5,
+};
+
+/**
+ * 有 MediaStreamDestination 的假 context。記下「開過幾次 MediaStreamDestination」與
+ * 「每個 source 接到哪」，測試靠它分辨輸出走 `<audio>` 還是直接接喇叭。
+ */
+class MediaCapableContext extends FakeAudioContext {
+  dest = { stream: { id: "fake-stream" } };
+  destCreated = 0;
+  connectedTo: unknown[] = [];
+  createMediaStreamDestination() {
+    this.destCreated++;
+    return this.dest;
+  }
+  createBufferSource() {
+    const src = super.createBufferSource();
+    const ctx = this;
+    return { ...src, connect(target?: unknown) { ctx.connectedTo.push(target); } };
+  }
+}
+
+class FakeAudio {
+  static instances: FakeAudio[] = [];
+  srcObject: unknown = null;
+  autoplay = false;
+  playsInline = false;
+  playCalls = 0;
+  paused = true;
+  constructor() { FakeAudio.instances.push(this); }
+  play() { this.playCalls++; this.paused = false; return Promise.resolve(); }
+  pause() { this.paused = true; }
+}
+
+const lastMediaCtx = (): MediaCapableContext =>
+  FakeAudioContext.instances[FakeAudioContext.instances.length - 1] as MediaCapableContext;
+
+/** 直接看 player 的兩個私有欄位（TypeScript 的 private 只管編譯期，執行期看得到） */
+const outputOf = (player: LipSyncPlayer) => player as unknown as { mediaDest: unknown; audioEl: unknown };
+
+describe("shouldRouteThroughMediaElement：只有 iOS／iPadOS 的輸出繞 <audio>", () => {
+  /**
+   * 🔴 這張表錯一格都有人聽得出來：
+   * - iOS 錯成 false → iPhone 靜音鍵下、或開著麥克風時，又回到「嘴在動但沒聲音」
+   * - 其他裝置錯成 true → 聲音又變悶、變老（2026-09-30 在使用者的 Mac Chrome 盲聽確認，
+   *   理由見 lipsync-player.ts 的 `mediaDest` 註解）
+   */
+  it.each<{ name: string; env: MediaRouteEnv; expected: boolean }>([
+    { name: "Mac Chrome", env: MAC_CHROME, expected: false },
+    { name: "Mac Safari", env: MAC_SAFARI, expected: false },
+    { name: "Windows Chrome", env: WINDOWS_CHROME, expected: false },
+    { name: "Windows 觸控筆電的 Chrome（有觸控點，但不是 Mac）", env: WINDOWS_TOUCH_CHROME, expected: false },
+    { name: "Android Chrome（有觸控點，但不是 Mac）", env: ANDROID_CHROME, expected: false },
+    { name: "iPhone Safari", env: IPHONE_SAFARI, expected: true },
+    { name: "iPhone Chrome（CriOS）", env: IPHONE_CHROME, expected: true },
+    { name: "iPad Safari（iPadOS 預設的桌面版 UA＋觸控）", env: IPAD_SAFARI_DESKTOP_UA, expected: true },
+    { name: "iPad Safari（行動版 UA）", env: IPAD_SAFARI_MOBILE_UA, expected: true },
+  ])("$name → $expected", ({ env, expected }) => {
+    expect(shouldRouteThroughMediaElement(env)).toBe(expected);
+  });
+
+  /**
+   * ⚠️ 取不到 UA 一律 false（退回直接接喇叭，不會炸）。
+   * node 那一筆是真的坑：Mac 上 node 的 `navigator.platform` 也是 "MacIntel"，
+   * 只是沒有 maxTouchPoints——只看 platform 的寫法會在這裡誤判成 iPad。
+   */
+  it.each<{ name: string; env: MediaRouteEnv | null | undefined }>([
+    { name: "SSR：沒有 navigator", env: undefined },
+    { name: "navigator 是 null", env: null },
+    { name: "UA 是空字串", env: { userAgent: "" } },
+    { name: "node 測試環境（UA 是 Node.js/…、platform 是 MacIntel、沒有 maxTouchPoints）", env: { userAgent: "Node.js/25", platform: "MacIntel" } },
+  ])("UA 取不到或不是瀏覽器 → false：$name", ({ env }) => {
+    expect(shouldRouteThroughMediaElement(env)).toBe(false);
+  });
+});
+
 describe("LipSyncPlayer 的 iOS 輸出路徑", () => {
   /**
    * 🔴 這一組鎖的是 iPhone 上「嘴在動但沒聲音」的修法。
@@ -136,33 +265,39 @@ describe("LipSyncPlayer 的 iOS 輸出路徑", () => {
    * `<audio>` 元素是媒體播放類別，兩者都不受影響。所以輸出要經
    * `createMediaStreamDestination()` 接一個 `<audio>`，而且那個元素的 `play()`
    * 必須在使用者手勢裡（`prime()`）呼叫——少任何一步，症狀都跟沒修一樣。
+   *
+   * ⚠️ 2026-09-30 起這條路**只給 iOS／iPadOS**（其他裝置見下一組），所以這一組都要先把
+   * navigator 換成 iOS 的；不換的話 node 的 navigator 會被判成非 iOS，這裡每一條都驗不到東西。
    */
-  class MediaCapableContext extends FakeAudioContext {
-    dest = { stream: { id: "fake-stream" }, connectedFrom: 0 };
-    createMediaStreamDestination() {
-      return this.dest;
-    }
-    createBufferSource() {
-      const src = super.createBufferSource();
-      const ctx = this;
-      return { ...src, connect(target?: unknown) { if (target === ctx.dest) ctx.dest.connectedFrom++; } };
-    }
-  }
-  class FakeAudio {
-    static instances: FakeAudio[] = [];
-    srcObject: unknown = null;
-    autoplay = false;
-    playCalls = 0;
-    paused = true;
-    constructor() { FakeAudio.instances.push(this); }
-    play() { this.playCalls++; this.paused = false; return Promise.resolve(); }
-    pause() { this.paused = true; }
-  }
-
   beforeEach(() => {
     FakeAudio.instances = [];
     vi.stubGlobal("window", { AudioContext: MediaCapableContext });
     vi.stubGlobal("Audio", FakeAudio);
+    vi.stubGlobal("navigator", IPHONE_SAFARI);
+  });
+
+  it.each<{ name: string; env: MediaRouteEnv }>([
+    { name: "iPhone Safari", env: IPHONE_SAFARI },
+    { name: "iPhone Chrome（CriOS）", env: IPHONE_CHROME },
+    { name: "iPad Safari（桌面版 UA＋觸控）", env: IPAD_SAFARI_DESKTOP_UA },
+  ])("🔴 $name：有 mediaDest、有 <audio>，prime() 會 play()，每一塊都接到 MediaStreamDestination", async ({ env }) => {
+    vi.stubGlobal("navigator", env);
+    const player = new LipSyncPlayer();
+    player.prime();
+    await player.play(streamOf([rampPcm(2400), rampPcm(2400)]));
+
+    const ctx = lastMediaCtx();
+    expect(ctx.destCreated).toBe(1);
+    expect(FakeAudio.instances).toHaveLength(1);
+    const el = FakeAudio.instances[0];
+    expect(outputOf(player).mediaDest).toBe(ctx.dest);
+    expect(outputOf(player).audioEl).toBe(el);
+    expect(el.srcObject).toBe(ctx.dest.stream);
+    expect(el.autoplay).toBe(true);
+    expect(el.playsInline).toBe(true);
+    expect(el.playCalls).toBe(1);
+    expect(ctx.connectedTo).toHaveLength(2);
+    for (const target of ctx.connectedTo) expect(target).toBe(ctx.dest);
   });
 
   it("🔴 prime() 要在手勢裡把 <audio> 元素 play 起來，而且接的是 MediaStream", () => {
@@ -181,8 +316,9 @@ describe("LipSyncPlayer 的 iOS 輸出路徑", () => {
     const player = new LipSyncPlayer();
     player.prime();
     await player.play(streamOf([rampPcm(2400), rampPcm(2400)]));
-    const ctx = FakeAudioContext.instances[FakeAudioContext.instances.length - 1] as unknown as MediaCapableContext;
-    expect(ctx.dest.connectedFrom).toBe(2);
+    const ctx = lastMediaCtx();
+    expect(ctx.connectedTo).toHaveLength(2);
+    for (const target of ctx.connectedTo) expect(target).toBe(ctx.dest);
   });
 
   it("dispose 要把 <audio> 停掉並解除 srcObject——不然元素會抓著串流不放", () => {
@@ -195,18 +331,97 @@ describe("LipSyncPlayer 的 iOS 輸出路徑", () => {
   });
 
   /**
-   * ⚠️ 反向：沒有 `Audio`（node 測試環境）或沒有 MediaStreamDestination（舊瀏覽器）
+   * ⚠️ 反向：即使是 iOS，沒有 `Audio` 或沒有 MediaStreamDestination（太舊的瀏覽器）
    * 就退回直接接 destination，行為跟修之前一樣，不可以炸。
-   * 上面「取樣對齊」那些測試跑的就是這條退回路徑。
+   * （其他 describe 用的是 node 的 navigator，本來就被判成非 iOS、直接接 destination。）
    */
   it("⚠️ 環境缺 Audio 時要安靜退回，不可以炸", async () => {
     vi.stubGlobal("Audio", undefined);
     const player = new LipSyncPlayer();
     expect(() => player.prime()).not.toThrow();
     await expect(player.play(streamOf([rampPcm(2400)]))).resolves.toBeUndefined();
-    const ctx = FakeAudioContext.instances[FakeAudioContext.instances.length - 1] as unknown as MediaCapableContext;
-    expect(ctx.dest.connectedFrom).toBe(0); // 沒有走 mediaDest
-    expect(ctx.scheduled).toHaveLength(1);   // 但音訊照樣排了
+    const ctx = lastMediaCtx();
+    expect(outputOf(player).mediaDest).toBeNull();
+    expect(ctx.connectedTo).toHaveLength(1);
+    expect(ctx.connectedTo[0]).toBe(ctx.destination); // 沒有走 mediaDest
+    expect(ctx.scheduled).toHaveLength(1);             // 但音訊照樣排了
+  });
+
+  it("⚠️ 沒有 MediaStreamDestination（太舊的瀏覽器）時要安靜退回，不可以炸", async () => {
+    vi.stubGlobal("window", { AudioContext: FakeAudioContext });
+    const player = new LipSyncPlayer();
+    expect(() => player.prime()).not.toThrow();
+    await expect(player.play(streamOf([rampPcm(2400)]))).resolves.toBeUndefined();
+    expect(FakeAudio.instances).toHaveLength(0);
+    expect(outputOf(player).mediaDest).toBeNull();
+    expect(outputOf(player).audioEl).toBeNull();
+    expect(ctxOf(player).scheduled).toHaveLength(1);
+  });
+});
+
+describe("LipSyncPlayer 的輸出路徑：非 iOS 直接接 ctx.destination", () => {
+  /**
+   * 🔴 2026-09-30 在使用者的 Mac Chrome 盲聽：同一段 PCM 走 `<audio>`（MediaStreamDestination）
+   * 比直接接 `ctx.destination` 悶、老，使用者聽得出來。
+   *
+   * 所以非 iOS 就算兩個 API 都在，也**不可以**開 MediaStreamDestination、不可以建 `<audio>`。
+   * 這一組鎖的就是「有能力也不走」——舊版只要兩個 API 都在就走，而桌面 Chrome 兩個都有。
+   */
+  beforeEach(() => {
+    FakeAudio.instances = [];
+    vi.stubGlobal("window", { AudioContext: MediaCapableContext });
+    vi.stubGlobal("Audio", FakeAudio);
+  });
+
+  it.each<{ name: string; env: MediaRouteEnv }>([
+    { name: "Mac Chrome", env: MAC_CHROME },
+    { name: "Mac Safari", env: MAC_SAFARI },
+    { name: "Windows Chrome", env: WINDOWS_CHROME },
+    { name: "Android Chrome", env: ANDROID_CHROME },
+  ])("🔴 $name：mediaDest／audioEl 都是 null，每一塊都直接接 ctx.destination", async ({ env }) => {
+    vi.stubGlobal("navigator", env);
+    const player = new LipSyncPlayer();
+    player.prime();
+    await player.play(streamOf([rampPcm(2400), rampPcm(2400)]));
+
+    const ctx = lastMediaCtx();
+    expect(outputOf(player).mediaDest).toBeNull();
+    expect(outputOf(player).audioEl).toBeNull();
+    expect(ctx.destCreated).toBe(0); // 連開都不開
+    expect(FakeAudio.instances).toHaveLength(0);
+    expect(ctx.connectedTo).toHaveLength(2);
+    for (const target of ctx.connectedTo) expect(target).toBe(ctx.destination);
+    expect(ctx.scheduled).toHaveLength(2); // 聲音照樣排了
+  });
+
+  it("prime()／dispose() 在沒有 <audio> 的路徑上不可以炸，dispose 照樣把 context 收掉", () => {
+    vi.stubGlobal("navigator", MAC_CHROME);
+    const player = new LipSyncPlayer();
+    expect(() => player.prime()).not.toThrow();
+    const ctx = lastMediaCtx();
+    expect(() => player.dispose()).not.toThrow();
+    expect(ctx.closed).toBe(true);
+    expect(player.contextState).toBeNull();
+  });
+
+  /**
+   * ⚠️ 讀 UA 的那一步本身不可以炸：它跑在 prime() 裡、使用者手勢的第一行，
+   * /live4 的 ChibiStage.prepare 沒有接例外，炸了會連 LiveStage 的 press() 一起中斷。
+   * 第二筆不是假想：stage-session 的治具就把 navigator 換成只有 sendBeacon 的物件。
+   */
+  it.each<{ name: string; nav: unknown }>([
+    { name: "SSR／沒有 navigator", nav: undefined },
+    { name: "navigator 沒有 userAgent", nav: { sendBeacon: () => true } },
+  ])("⚠️ 讀不到 UA（$name）：當成非 iOS，不可以炸", async ({ nav }) => {
+    vi.stubGlobal("navigator", nav);
+    const player = new LipSyncPlayer();
+    expect(() => player.prime()).not.toThrow();
+    await player.play(streamOf([rampPcm(2400)]));
+    const ctx = lastMediaCtx();
+    expect(outputOf(player).mediaDest).toBeNull();
+    expect(outputOf(player).audioEl).toBeNull();
+    expect(ctx.connectedTo).toHaveLength(1);
+    expect(ctx.connectedTo[0]).toBe(ctx.destination);
   });
 });
 

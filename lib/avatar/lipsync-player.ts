@@ -12,7 +12,7 @@
  * 就回報 `onFirstAudio`，後面的還在傳。任何「先 await 整條 stream 再播」的重構
  * 都會把那 7.8 秒加回來，而且症狀只是「感覺有點慢」，不會有錯誤訊息。
  *
- * ## ⚠️ 解碼不能用 `<audio>` 或 `decodeAudioData`，但輸出要走 `<audio>`
+ * ## ⚠️ 解碼不能用 `<audio>` 或 `decodeAudioData`；輸出只有 iOS 走 `<audio>`
  *
  * 這兩件事要分開講，不然會互相矛盾：
  *
@@ -21,9 +21,11 @@
  * 判斷取樣率與位元深度，餵裸 PCM 進去一律解不出來。所以走
  * `createBuffer` ＋ `AudioBufferSourceNode`，自己把 Int16 轉成 Float32。
  *
- * **輸出**：音訊圖算完之後**不直接接喇叭**，而是經 `createMediaStreamDestination()`
- * 接進一個 `<audio srcObject>` 元素。這是 iPhone 上「嘴在動但沒聲音」的修法，
- * 理由見 `mediaDest` 欄位的註解。
+ * **輸出**：**只有 iOS／iPadOS** 的音訊圖不直接接喇叭，而是經 `createMediaStreamDestination()`
+ * 接進一個 `<audio srcObject>` 元素——那是 iPhone 上「嘴在動但沒聲音」的修法。
+ * 🔴 桌面與 Android 一律直接接 `ctx.destination`：2026-09-30 盲聽確認，桌面 Chrome 走
+ * `<audio>` 那條路聲音會變悶、變老。兩邊的理由都在 `mediaDest` 欄位的註解，
+ * 哪些裝置算 iOS 見 `shouldRouteThroughMediaElement`。
  *
  * ## ⚠️ 時間軸不是「開頭時間 ＋ atMs」
  *
@@ -93,6 +95,57 @@ export interface LipSyncPlayerOptions {
 const SILENT: VisemeState = { viseme: "closed", level: 0 };
 
 /**
+ * `shouldRouteThroughMediaElement` 要看的那幾樣東西，都來自 `navigator`。
+ * 刻意是鬆的型別：node 測試可以直接塞物件；取不到 navigator（SSR）時整個傳 undefined。
+ */
+export interface MediaRouteEnv {
+  userAgent: string;
+  platform?: string;
+  maxTouchPoints?: number;
+}
+
+/**
+ * 這台裝置的輸出要不要繞 `<audio>` 元素（`createMediaStreamDestination()` → `<audio srcObject>`）。
+ *
+ * 🔴 **只有 iOS／iPadOS 回 true**。繞路是 iPhone 非繞不可的修法，但桌面 Chrome 繞了聲音會變悶、
+ * 變老（2026-09-30 盲聽），所以不是「繞了比較保險」——兩邊的理由都在 `LipSyncPlayer.mediaDest`。
+ *
+ * - UA 含 iPhone／iPad／iPod 就算。iPhone 上的 Chrome（UA 是 CriOS）也在內：
+ *   iOS 版 Chrome 用的也是 WebKit，吃的是同一套坑。
+ * - ⚠️ iPadOS 的 Safari 預設「要求桌面版網站」，UA 跟 Mac Safari **一字不差**，只能靠
+ *   `platform === "MacIntel"` 且 `maxTouchPoints > 1` 認出來（Mac 沒有觸控螢幕，是 0）。
+ *   兩個條件缺一不可：只看觸控點數，Android 與觸控筆電會被算進來；只看 platform，
+ *   所有 Mac 都會被算進來——連 Mac 上的 node 都是（它的 `navigator.platform` 也是 "MacIntel"）。
+ * - 取不到 UA（SSR、測試環境）一律 false：退回直接接 destination，不會炸。
+ */
+export function shouldRouteThroughMediaElement(env: MediaRouteEnv | null | undefined): boolean {
+  if (!env) return false;
+  const userAgent = typeof env.userAgent === "string" ? env.userAgent : "";
+  if (/iPhone|iPad|iPod/.test(userAgent)) return true;
+  return env.platform === "MacIntel" && (env.maxTouchPoints ?? 0) > 1;
+}
+
+/**
+ * 從 `navigator` 讀出判斷要用的欄位；讀不到 UA 就回 undefined（判斷會當成非 iOS）。
+ *
+ * ⚠️ 讀這一步本身不可以丟例外：它跑在 `prime()` 裡，也就是使用者手勢的第一行。
+ * /live4 的 ChibiStage.prepare 沒有接例外，炸了會連 LiveStage 的 press() 一起中斷；
+ * monogram 的 unlockAudio 則會把它記成「AudioContext 開不起來」。所以每個欄位都先驗型別
+ * （SSR 沒有 navigator；stage-session 的測試治具把 navigator 換成只有 sendBeacon 的物件）。
+ */
+function readMediaRouteEnv(): MediaRouteEnv | undefined {
+  if (typeof navigator === "undefined" || !navigator) return undefined;
+  // 用鬆的型別讀：`platform` 在 lib.dom 標成 deprecated，而且上面說的假物件欄位不齊
+  const nav = navigator as unknown as { userAgent?: unknown; platform?: unknown; maxTouchPoints?: unknown };
+  if (typeof nav.userAgent !== "string") return undefined;
+  return {
+    userAgent: nav.userAgent,
+    platform: typeof nav.platform === "string" ? nav.platform : undefined,
+    maxTouchPoints: typeof nav.maxTouchPoints === "number" ? nav.maxTouchPoints : undefined,
+  };
+}
+
+/**
  * 一段話一個 `play()`。同一個 player 可以重複播，狀態每次重置。
  *
  * 典型用法：
@@ -116,9 +169,11 @@ export class LipSyncPlayer {
   private ctx: AudioContext | null = null;
 
   /**
-   * 🔴 輸出不直接接 `ctx.destination`，而是經過一個 `<audio>` 元素。
+   * 🔴 **只有 iOS／iPadOS** 的輸出不直接接 `ctx.destination`，而是經過一個 `<audio>` 元素；
+   * 桌面、Android 直接接 `ctx.destination`，這兩個欄位維持 null。
+   * 哪些裝置算 iOS 見 `shouldRouteThroughMediaElement`。
    *
-   * 這是 iPhone 上實際踩到的：**嘴在動、答案有出來、但沒有聲音**。
+   * **iOS 為什麼要繞**：這是 iPhone 上實際踩到的：**嘴在動、答案有出來、但沒有聲音**。
    * 嘴會動證明 context 是 running 的、音訊也排進去了——問題純粹在輸出端。
    * iOS 把「純 Web Audio」當成環境音（ambient）：
    *   - 靜音鍵會把它整個關掉
@@ -130,10 +185,29 @@ export class LipSyncPlayer {
    * 音訊圖的輸出就變成媒體播放。代價是多 20–60ms 的輸出延遲，
    * 低於一幀嘴型（40ms）的量級，實際聽不出來。
    *
+   * **🔴 其他裝置為什麼不可以繞（2026-09-30 盲聽）**：使用者一直回報「數位人回答時有兩種聲音，
+   * 一開始不像老師（比較老），後來才是」，換過 TTS 模型（v3 → v4）還是一樣。直接合成的音檔、
+   * 在使用者 Chrome 裡攔到的原始 PCM、Web Audio 的排程（播放速率 1、沒有 detune、沒有重疊）
+   * 全部正常。最後在使用者的 Mac Chrome 上盲聽 A/B：同一段 24 kHz 原始 PCM，
+   * A 直接接 `ctx.destination`，B 走「MediaStreamDestination → `new Audio()` 的 `srcObject`」
+   * （也就是這裡原本對所有裝置的接法），兩者都延遲 4 秒才開始播。使用者的判斷是
+   * 「B 有老一點點，聲音比較悶」，選 A。
+   * 結論：**桌面 Chrome 走這條 MediaStream 播放路徑，聲音會變悶、變老，使用者聽得出來**——
+   * 問題不在 TTS。
+   *
+   * ⚠️ 不要為了「全平台一致」又把桌面改回 `<audio>`。一致的代價是每一位桌面訪客聽到的
+   * 聲音都比較不像老師，而那正是使用者一路回報、換模型也修不掉的問題。
+   *
+   * ⚠️ 待辦：**iPhone 上這條路是不是也會悶，還沒實測**（上面的盲聽是在 Mac Chrome 上做的）。
+   * iOS 仍然繞，因為「靜音鍵下沒聲音」比「悶一點」嚴重。可能的替代是
+   * `navigator.audioSession.type = "playback"`（若它能讓純 Web Audio 在 iPhone 上被當成
+   * 媒體播放，就不用繞 `<audio>`）——但要在 iPhone 實機上驗過「開著靜音鍵」與
+   * 「頁面開著麥克風」兩個情境都有聲音、而且從喇叭出來，才能換。
+   *
    * ⚠️ 元素的 `play()` 必須在使用者手勢裡呼叫（跟 resume 同一個理由），
    * 所以放在 `prime()`。沒有這一步，iOS 會拒絕播放，症狀跟修之前一模一樣。
    *
-   * ⚠️ 兩個 API 缺任何一個就退回直接接 destination（測試環境沒有 `Audio`；
+   * ⚠️ iOS 上兩個 API 缺任何一個也退回直接接 destination（沒有 `Audio`；
    * 太舊的瀏覽器沒有 MediaStreamDestination）。退回時只是回到修之前的行為，
    * 不會更糟。
    */
@@ -223,7 +297,7 @@ export class LipSyncPlayer {
     const ctx = this.ensureContext();
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
     // 🔴 這一行是 iOS 有沒有聲音的關鍵，理由見 `mediaDest` 的註解。
-    // 冪等：已經在播的元素再 play() 一次是 no-op。
+    // 冪等：已經在播的元素再 play() 一次是 no-op。非 iOS 沒有這個元素（null），這行什麼都不做。
     this.audioEl?.play().catch(() => {});
   }
 
@@ -396,9 +470,10 @@ export class LipSyncPlayer {
       this.ctx = new Ctor();
     }
 
-    // 輸出改走 <audio> 元素，理由見 `mediaDest` 欄位的註解。
-    // 兩個能力缺一就不做，退回直接接 destination。
+    // 🔴 只有 iOS 的輸出改走 <audio> 元素；其他裝置不建，mediaDest 維持 null、直接接 destination。
+    // 理由（含 2026-09-30 桌面盲聽）見 `mediaDest` 欄位的註解。iOS 上兩個能力缺一也不做。
     if (
+      shouldRouteThroughMediaElement(readMediaRouteEnv()) &&
       typeof this.ctx.createMediaStreamDestination === "function" &&
       typeof Audio !== "undefined"
     ) {
@@ -439,7 +514,7 @@ export class LipSyncPlayer {
 
     const source = ctx.createBufferSource();
     source.buffer = buffer;
-    // 有 <audio> 路徑就走它（iOS 才有聲音），沒有才直接接喇叭
+    // 只有 iOS 有 mediaDest（走 <audio> 才有聲音）；其他裝置是 null，直接接喇叭——理由見欄位註解
     source.connect(this.mediaDest ?? ctx.destination);
 
     const startedAt = Math.max(ctx.currentTime + this.leadSeconds, this.nextAt);
