@@ -40,6 +40,7 @@ import {
   REFUSAL_MEDICAL_REPLY,
   REFUSAL_PRIVACY_REPLY,
   REFUSAL_PROFANITY_REPLY,
+  REFUSAL_SYSTEM_REPLY,
   SMALLTALK_FAREWELL_REPLY,
   SMALLTALK_GREETING_REPLY,
   SMALLTALK_PRAISE_REPLY,
@@ -225,7 +226,7 @@ function detectPraise(message: string): SmalltalkKind | null {
  *
  * 🔴 第三輪驗收：模型剛問「想聽聽我創辦婦女新知的經過嗎？」，訪客回「好啊」，寒暄路徑卻回「不客氣」。
  * ⚠️ 站方寫死的固定回覆一律不算邀請（第十一輪擴大到全部）：寒暄與讚美、危機、私人資訊／髒話／騷擾／醫療／理財／
- * 代勞／代寫的拒絕、隱私攔截、離題／護欄／落地／生成失敗的罐頭句，以及同理備援（2026-09-29）。它們結尾的「都可以問我」
+ * 代勞／代寫的拒絕、隱私攔截、離題／護欄／落地／生成失敗的罐頭句，同理備援（2026-09-29），以及系統架構與資料隱私的迴避句（2026-09-30）。它們結尾的「都可以問我」
  * 「要不要換個方向試試？」是泛泛的歡迎，後面接「好」「嗯」就只是應答——讓它走原路徑，query-expansion 會把被拒絕的那一題帶回檢索。
  * 「半段＋罐頭句」也算（結尾是那一句就是）。
  */
@@ -244,6 +245,7 @@ const FIXED_REPLIES = [
   REFUSAL_FINANCE_REPLY,
   REFUSAL_ERRAND_REPLY,
   REFUSAL_CREATION_REPLY,
+  REFUSAL_SYSTEM_REPLY,
   PRIVACY_REPLY,
   OUT_OF_SCOPE_REPLY,
   GUARDED_REPLY,

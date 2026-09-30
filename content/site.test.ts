@@ -24,8 +24,12 @@ import {
   FALLBACK_REPLY,
   SMALLTALK_PRAISE_REPLY,
   VENTING_REPLY,
+  REFUSAL_SYSTEM_REPLY,
   TAIL_REPLIES,
+  nav,
+  footerLinks,
 } from "@/content/site";
+import { checkAnswer } from "@/lib/answer-guard";
 
 /**
  * 把「哪些話用第一人稱、哪些話必須維持第三人稱」寫成可執行的規格。
@@ -65,6 +69,7 @@ describe("文案的人稱分工", () => {
       ["FALLBACK_REPLY", FALLBACK_REPLY],
       ["SMALLTALK_PRAISE_REPLY", SMALLTALK_PRAISE_REPLY],
       ["VENTING_REPLY", VENTING_REPLY],
+      ["REFUSAL_SYSTEM_REPLY", REFUSAL_SYSTEM_REPLY],
     ] as const) {
       expect(line, name).toContain("我");
       // ⚠️ 這兩句以前寫「我能談的是李元貞老師的生平」——第一人稱語氣配第三人稱自稱
@@ -82,7 +87,7 @@ describe("文案的人稱分工", () => {
   });
 
   /** 寒暄回覆會被唸出來、當字幕，要短（需求：60 字以內，不算空白） */
-  it("寒暄與拒絕回覆 60 字以內（含醫療、理財、代勞、創作、隱私攔截、讚美、同理備援）", () => {
+  it("寒暄與拒絕回覆 60 字以內（含醫療、理財、代勞、創作、隱私攔截、讚美、同理備援、系統架構）", () => {
     for (const line of [
       PRIVACY_REPLY,
       VENTING_REPLY,
@@ -97,6 +102,7 @@ describe("文案的人稱分工", () => {
       REFUSAL_FINANCE_REPLY,
       REFUSAL_ERRAND_REPLY,
       REFUSAL_CREATION_REPLY,
+      REFUSAL_SYSTEM_REPLY,
     ]) {
       expect(Array.from(line.replace(/\s/g, "")).length, line).toBeLessThanOrEqual(60);
     }
@@ -153,6 +159,7 @@ describe("文案的人稱分工", () => {
       FALLBACK_REPLY,
       SMALLTALK_PRAISE_REPLY,
       VENTING_REPLY,
+      REFUSAL_SYSTEM_REPLY,
     ]) {
       expect(line).not.toMatch(/[*#`]|^\s*[-•]/m);
     }
@@ -171,6 +178,7 @@ describe("文案的人稱分工", () => {
       CRISIS_SELF_HARM_REPLY,
       CRISIS_VIOLENCE_REPLY,
       VENTING_REPLY,
+      REFUSAL_SYSTEM_REPLY,
     ]) {
       expect(TAIL_REPLIES).toContain(reply);
     }
@@ -202,5 +210,22 @@ describe("文案的人稱分工", () => {
     expect(corpus).toContain("婦女新知從來不是一個人的事業"); // 03-movement-timeline.md:25
     expect(corpus).toContain("強調婦運是集體的成果"); // 03-movement-timeline.md:29
     expect(corpus).toContain("台灣婦女運動不是靠某一個人完成的"); // 04-thought.md:54
+  });
+
+  /**
+   * 🔴 2026-09-30：系統架構與資料隱私的迴避句要點名網站上真的看得到的兩頁——導覽列與頁尾的「資訊聲明」、頁尾的「隱私權」。
+   * 從 nav／footerLinks 的 label 取：改了 label 沒回來改這句，這裡會紅（講一個畫面上找不到的頁名，等於沒指路）。
+   * 不寫「網站下方」：/live4 刻意不掛 Nav 與 Footer。它自己也不可以含任何技術名詞——要過得了護欄的 system 類。
+   */
+  it("系統架構的迴避句點名網站上真的看得到的頁名、不講位置、不含技術名詞", () => {
+    const about = nav.find((item) => item.href === "/about-ai");
+    const privacy = footerLinks.find((item) => item.href === "/privacy");
+    expect(about?.label).toBe("資訊聲明");
+    expect(privacy?.label).toBe("隱私權");
+    expect(REFUSAL_SYSTEM_REPLY).toContain(`「${about?.label}」`);
+    expect(REFUSAL_SYSTEM_REPLY).toContain(`「${privacy?.label}」`);
+    expect(REFUSAL_SYSTEM_REPLY).not.toMatch(/下方|頁尾|底下/);
+    expect(checkAnswer(`${REFUSAL_SYSTEM_REPLY}\n`).blocked).toBe(false);
+    expect(REFUSAL_SYSTEM_REPLY).not.toMatch(/[A-Za-z]/);
   });
 });

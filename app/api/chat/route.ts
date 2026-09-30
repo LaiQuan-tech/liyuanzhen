@@ -24,6 +24,7 @@ import {
   REFUSAL_FINANCE_REPLY,
   REFUSAL_ERRAND_REPLY,
   REFUSAL_CREATION_REPLY,
+  REFUSAL_SYSTEM_REPLY,
   VENTING_REPLY,
 } from "@/content/site";
 import type { HistoryTurn } from "@/lib/query-expansion";
@@ -102,6 +103,7 @@ const REFUSAL_REPLY: Record<RefusalKind, string> = {
   finance: REFUSAL_FINANCE_REPLY,
   errand: REFUSAL_ERRAND_REPLY,
   creation: REFUSAL_CREATION_REPLY,
+  system: REFUSAL_SYSTEM_REPLY,
 };
 
 /**
@@ -277,6 +279,10 @@ export async function POST(request: NextRequest) {
   // 模型其實都正確拒絕了，但措辭每次不同，落地檢查常把拒絕換成「這一題我答不上來」，答非所問。
   // 對她的身體、衣著、性、親密關係的騷擾式提問也走這裡（「妳穿什麼顏色的內衣」原本被判離題、回了離題罐頭，
   // 等於沒拒絕，還像在邀請繼續問）。
+  // 🔴 2026-09-30：問這個網站／系統本身的技術架構與資料隱私（「你這個系統是怎麼寫的」「你用的是 ChatGPT 嗎」
+  // 「你們會存我的對話嗎」）也走這裡，回 REFUSAL_SYSTEM_REPLY。專案擁有者截圖：原本模型照語料講出「透過 Google Gemini
+  // 依內容回答，並部署在 Vercel」；擁有者指示「如果有人嘗試詢問系統的架構，或是系統隱私的問題，都要避開」。
+  // 「你是 AI 嗎」「你是真的李元貞嗎」不在這一類，照舊交給模型據實回答（判準見 lib/refusal-request.ts 的 system 那一節）。
   // 記錄照寒暄的寫法；回應標頭 X-Retrieval-Scope: refusal。
   // ⚠️ 順序：危機判斷與危機延續在前——「我被打了 可以給我妳的電話嗎」要回危機回覆，上一句是危機回覆時也不接手。
   // 排在寒暄之前，但兩者互斥、先後不影響結果：寒暄要「整句」就是招呼語，這裡要的是帶著內容的請求。
@@ -446,9 +452,10 @@ export async function POST(request: NextRequest) {
           controller.enqueue(encoder.encode(answer));
         } else if (finished.blocked || blocked) {
           blocked = true;
-          // kind 分辨四種攔截原因：pattern＝封鎖清單命中（政治表態／新承諾／新書資訊），
+          // kind 分辨五種攔截原因：pattern＝封鎖清單命中（政治表態／新承諾／新書資訊），
           // leak＝推理外洩（第十五輪從封鎖清單分出來），privacy＝在世家人隱私與老師近況（第十輪分出來），
-          // grounding＝落地率不足或未落地引用。分不出來（理論上不會發生，只是防呆）時退回 GUARDED_REPLY。
+          // system＝技術供應商與架構名詞（2026-09-30），grounding＝落地率不足或未落地引用。
+          // 分不出來（理論上不會發生，只是防呆）時退回 GUARDED_REPLY。
           // 見 content/site.ts 那幾句上方的註解。
           // 🔴 延續中（上一句是危機回覆）不管哪一種攔截，一律送同一句危機回覆。
           // 第十五輪（獨立審查）：原本只有落地檢查與隱私接延續，pattern 照舊送 GUARDED_REPLY——訪客剛說完不想活、
@@ -458,6 +465,9 @@ export async function POST(request: NextRequest) {
           // 🔴 leak＝模型的推理漏進輸出（英文推理、數字數、草稿標記），是模型故障不是表態：
           // 送 FALLBACK_REPLY（跟生成失敗同一句），而且記 failed，後台才看得到——原本跟政治共用「這部分我不方便表態」，
           // 回給「你爸媽是做什麼的」答非所問，也被記成一個正常的攔截。answerSummary 照其他攔截存原答（後台要看得到漏了什麼）。
+          // 🔴 system＝答案講出技術供應商或架構名詞（Gemini、Vercel、ChatGPT、語言模型…，2026-09-30）：檢索前的
+          // system 類漏接、模型照語料 07 講了網站怎麼運作時的最後一道。送 REFUSAL_SYSTEM_REPLY（跟檢索前那條同一句），
+          // blocked 記 true、failed 不記（模型照資料講，不是故障）；answerSummary 照其他攔截存原答，後台看得到講了什麼。
           const reply =
             continuing ??
             (finished.kind === "grounding"
@@ -466,7 +476,9 @@ export async function POST(request: NextRequest) {
                 ? PRIVACY_REPLY
                 : finished.kind === "leak"
                   ? FALLBACK_REPLY
-                  : GUARDED_REPLY);
+                  : finished.kind === "system"
+                    ? REFUSAL_SYSTEM_REPLY
+                    : GUARDED_REPLY);
           if (finished.kind === "leak") failed = true;
           controller.enqueue(encoder.encode(reply));
         } else if (!finished.text.trim()) {

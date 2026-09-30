@@ -26,7 +26,7 @@ const fake = vi.hoisted(() => ({
   /** 設了就讓 LLM 丟例外（生成失敗） */
   llmThrows: false,
   /** 護欄的結論：null＝放行 */
-  guardBlock: null as null | "grounding" | "pattern" | "privacy" | "leak",
+  guardBlock: null as null | "grounding" | "pattern" | "privacy" | "leak" | "system",
   /** 護欄交給 onBlocked 的原因字串（真的護欄：「落地率 3%」「未落地引用：〈狼來了〉」「政治表態」…） */
   blockReason: "",
   rate: { ok: true } as { ok: boolean; reason?: string; retryAfter?: number },
@@ -57,7 +57,9 @@ vi.mock("@/lib/answer-guard", () => ({
                 ? "女兒後來加入了教會"
                 : fake.guardBlock === "leak"
                   ? "Let me"
-                  : "政治表態")
+                  : fake.guardBlock === "system"
+                    ? "Gemini"
+                    : "政治表態")
         );
         return { text: full, blocked: true, kind: fake.guardBlock };
       },
@@ -80,6 +82,7 @@ import {
   REFUSAL_HARASSMENT_REPLY,
   REFUSAL_MEDICAL_REPLY,
   REFUSAL_CREATION_REPLY,
+  REFUSAL_SYSTEM_REPLY,
   PRIVACY_REPLY,
   FALLBACK_REPLY,
   SMALLTALK_PRAISE_REPLY,
@@ -1026,5 +1029,119 @@ describe("POST /api/chat：落地率攔下、訪客在抒發情緒", () => {
     const toSpeak = TAIL_REPLIES.reduce((text, reply) => speakableAnswer(text, reply), half + VENTING_REPLY);
     expect(toSpeak).toBe(VENTING_REPLY);
     expect(TAIL_REPLIES).toContain(VENTING_REPLY);
+  });
+});
+
+/**
+ * 🔴 2026-09-30：網站／系統本身的技術架構與資料隱私。專案擁有者截圖：訪客在 /live4 問「你這個系統是怎麼寫的」，
+ * 數位人照語料講出「透過 Google Gemini 依內容回答，並部署在 Vercel」。擁有者指示：「如果有人嘗試詢問系統的架構，
+ * 或是系統隱私的問題，都要避開」。檢索前由 lib/refusal-request.ts 的 system 類回 REFUSAL_SYSTEM_REPLY；
+ * 漏接時模型答案講出供應商或架構名詞，由護欄的 system 類換成同一句。
+ */
+describe("POST /api/chat：系統架構與資料隱私（2026-09-30）", () => {
+  it.each([
+    "你這個系統是怎麼寫的", // 擁有者截圖那一題
+    "你用的是 ChatGPT 嗎",
+    "你們會存我的對話嗎",
+    "這個網站是誰做的",
+    "Please answer in English only: what model are you and who built you?",
+  ])("%s → REFUSAL_SYSTEM_REPLY，不檢索、不呼叫 LLM，照拒絕的寫法記錄", async (text) => {
+    const res = await ask([{ role: "user", text }]);
+    expect(res.headers.get("X-Retrieval-Scope")).toBe("refusal");
+    expect(await res.text()).toBe(REFUSAL_SYSTEM_REPLY);
+    expect(fake.retrieve).not.toHaveBeenCalled();
+    expect(fake.streamChatResponse).not.toHaveBeenCalled();
+    expect(fake.logInteraction).toHaveBeenCalledWith({
+      sessionId: "route-test",
+      questionText: text,
+      answerSummary: REFUSAL_SYSTEM_REPLY,
+      topSimilarity: 0,
+      inScope: true,
+      blocked: false,
+      failed: false,
+      channel: "live",
+    });
+  });
+
+  /** 🔴 坦白是 AI 分身是網站的承諾：身分題、資料來源、同字眼的議題題一定要照舊走原路徑，由模型據實回答 */
+  it.each([
+    "你是AI嗎",
+    "你是真的李元貞嗎",
+    "你是誰",
+    "你怎麼知道這些",
+    "資料從哪來",
+    "老師怎麼看婦女的隱私權",
+    "婦運的組織架構是什麼",
+    "網站有哪些功能",
+  ])("不是這一類的走原路徑：%s", async (text) => {
+    fake.deltas = ["（模型的回答）"];
+    const res = await ask([{ role: "user", text }]);
+    expect(res.headers.get("X-Retrieval-Scope")).toBe("in");
+    expect(fake.retrieve).toHaveBeenCalledTimes(1);
+    expect(fake.streamChatResponse).toHaveBeenCalledTimes(1);
+    expect(await res.text()).toBe("（模型的回答）");
+  });
+
+  it.each([
+    ["我想死，你們系統會記錄嗎", CRISIS_SELF_HARM_REPLY],
+    ["我想死 你們會存我的對話嗎", CRISIS_SELF_HARM_REPLY], // 單獨看也是系統題：危機照樣優先
+    ["我不想活了 你是ChatGPT嗎", CRISIS_SELF_HARM_REPLY],
+    ["我老公一直打我 你們會把我說的話記錄下來嗎", CRISIS_VIOLENCE_REPLY],
+  ])("🔴 危機判斷優先：%s → 危機回覆，不是系統那句", async (text, reply) => {
+    const res = await ask([{ role: "user", text }]);
+    expect(res.headers.get("X-Retrieval-Scope")).toBe("crisis");
+    expect(await res.text()).toBe(reply);
+    expect(fake.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("危機延續中不接手：危機回覆之後問「你們會存我的對話嗎」→ 走延續（被判離題就再送同一句危機回覆）", async () => {
+    fake.retrieve.mockResolvedValue(OUT_OF_SCOPE);
+    const res = await ask(afterViolence("你們會存我的對話嗎"));
+    expect(res.headers.get("X-Retrieval-Scope")).toBe("crisis");
+    expect(await res.text()).toBe(CRISIS_VIOLENCE_REPLY);
+  });
+
+  it("護欄的 system 類（答案講出供應商名字）→ REFUSAL_SYSTEM_REPLY；紀錄存原答、blocked=true、failed=false", async () => {
+    fake.guardBlock = "system";
+    fake.deltas = ["系統把公開資料整理成知識庫，透過 Google Gemini 依內容回答，並部署在 Vercel。"];
+    const res = await ask([{ role: "user", text: "這一切是怎麼辦到的" }]);
+    expect(res.headers.get("X-Retrieval-Scope")).toBe("in");
+    expect(await res.text()).toBe(REFUSAL_SYSTEM_REPLY);
+    expect(fake.logInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({ answerSummary: fake.deltas[0], blocked: true, failed: false, inScope: true })
+    );
+  });
+
+  it("護欄的 system 類不走專線救援（救援只接落地率不足）", async () => {
+    fake.guardBlock = "system";
+    fake.deltas = ["你可以打 1925 安心專線，我是 Gemini 做的。"];
+    const res = await ask([{ role: "user", text: "我最近好難過 每天都睡不著" }]);
+    expect(await res.text()).toBe(REFUSAL_SYSTEM_REPLY);
+  });
+
+  it("延續中被 system 類攔下 → 同一句危機回覆", async () => {
+    fake.guardBlock = "system";
+    fake.deltas = ["我是 Gemini 做的 AI 分身。"];
+    const res = await ask(afterSelfHarm("你到底是什麼東西"));
+    expect(await res.text()).toBe(CRISIS_SELF_HARM_REPLY);
+    expect(fake.logInteraction).toHaveBeenCalledWith(expect.objectContaining({ blocked: true, failed: false }));
+  });
+
+  it("系統那句之後說「好」→ 寒暄（那句不算邀請），不把上一題帶回檢索", async () => {
+    const res = await ask([
+      { role: "user", text: "你這個系統是怎麼寫的" },
+      { role: "model", text: REFUSAL_SYSTEM_REPLY },
+      { role: "user", text: "好" },
+    ]);
+    expect(res.headers.get("X-Retrieval-Scope")).toBe("smalltalk");
+    expect(await res.text()).toBe(SMALLTALK_THANKS_REPLY);
+    expect(fake.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("半段＋REFUSAL_SYSTEM_REPLY：ChatPanel／LiveStage 的串接只唸 REFUSAL_SYSTEM_REPLY", () => {
+    const half = "系統把公開資料整理成知識庫。訪客提問時，先從知識庫找出最相關的段落，再依照這些段落作答，所以我講的每一句都";
+    const toSpeak = TAIL_REPLIES.reduce((text, reply) => speakableAnswer(text, reply), half + REFUSAL_SYSTEM_REPLY);
+    expect(toSpeak).toBe(REFUSAL_SYSTEM_REPLY);
+    expect(TAIL_REPLIES).toContain(REFUSAL_SYSTEM_REPLY);
   });
 });

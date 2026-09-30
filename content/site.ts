@@ -188,6 +188,32 @@ export const VENTING_REPLY =
   "聽起來你現在真的很不好受，謝謝你願意說出來。我沒辦法替你做決定，想聽老師當年怎麼面對類似的事，都可以問我。";
 
 /**
+ * 網站／系統本身的技術架構與資料隱私的固定回覆（2026-09-30）。兩條路會送這一句：
+ * - 檢索之前：lib/refusal-request.ts 的 system 類命中（用什麼 AI、怎麼寫的、部署在哪、提示詞、誰做的、
+ *   對話會不會被記錄…），app/api/chat/route.ts 直接回這句，不檢索、不呼叫 LLM；
+ * - 輸出端：模型的答案講出技術供應商或架構名詞（lib/answer-guard.ts 的 SYSTEM_PATTERNS，kind "system"），
+ *   route 把整段換成這句。
+ *
+ * 🔴 為什麼要有：2026-09-30 專案擁有者截圖，訪客在 /live4 問「你這個系統是怎麼寫的」，數位人回
+ * 「系統把公開資料整理成知識庫，透過 Google Gemini 依內容回答，並部署在 Vercel。至於具體由誰製作或程式怎麼寫的，
+ * 這部分我沒有記載。」擁有者指示原文：「如果有人嘗試詢問系統的架構，或是系統隱私的問題，都要避開」。
+ *
+ * ⚠️ 點名的兩頁用網站上真的看得到的名稱：導覽列與頁尾的「資訊聲明」（/about-ai，nav 的 label）、
+ * 頁尾的「隱私權」（/privacy，footerLinks 的 label）。改 label 要回來改這句（content/site.test.ts 綁著）。
+ * 不寫「網站下方」：/live4 刻意不掛 Nav 與 Footer（app/live4/page.tsx 檔頭），在那一頁講「下方」是假話。
+ * ⚠️ 第一人稱、無 Markdown、60 字以內（會被 TTS 唸出來、也會當字幕），跟其他 REFUSAL_*_REPLY 同一個收尾；
+ * 不含任何技術名詞與供應商名稱——它自己要過得了 SYSTEM_PATTERNS。
+ * 建議文案原本是 75 字（「…我沒辦法在這裡細談；想了解的話，網站下方的「資訊聲明」和「隱私權說明」寫得最清楚…」），
+ * 為了守 60 字拿掉「在這裡」「想了解的話」，頁名改成畫面上的「隱私權」。
+ * ⚠️ 坦白是 AI 分身不走這一句：「你是 AI 嗎」「你是真的李元貞嗎」照舊由模型據實回答（lib/refusal-request.ts 不收）。
+ * ⚠️ 也會接在已送出的半段後面（模型超過 140 字緩衝、finish() 才攔下時），所以收在下面的 TAIL_REPLIES。
+ * ⚠️ 放在這裡、不跟其他 REFUSAL_*_REPLY 排在一起是刻意的：TAIL_REPLIES 在模組載入時就要讀它，
+ * 宣告排在 TAIL_REPLIES 後面會在載入時丟 ReferenceError（const 的 TDZ）。
+ */
+export const REFUSAL_SYSTEM_REPLY =
+  "網站背後的技術和資料處理，我沒辦法細談；「資訊聲明」和「隱私權」兩頁寫得最清楚。想聊她的婦運路、她寫的書，都可以問我。";
+
+/**
  * app/api/chat/route.ts 會「接在已經送出的半段後面」的固定回覆：護欄攔下（GUARDED／PRIVACY）、落地失敗（UNGROUNDED）、
  * 生成失敗與推理外洩（FALLBACK）、危機延續與專線救援（兩句危機回覆），以及同理備援（VENTING）。
  * 模型超過 140 字緩衝時前半段已經送出，攔下或失敗之後 route 才把這幾句接在後面。
@@ -196,6 +222,8 @@ export const VENTING_REPLY =
  * 結尾是其中一句，就只唸那一句——被攔下或失敗的前半段不可以用她的臉和聲音唸出去（理由見 lib/avatar/types.ts）。
  * 第十輪加 PRIVACY_REPLY、第十一輪加 FALLBACK_REPLY（「半段＋抱歉，我這邊出了點狀況」會被整段唸出來）。
  * 兩句危機回覆是同一個洞：延續中被落地檢查攔下、專線救援，也是接在半段後面；2026-09-29 的同理備援也一樣。
+ * 2026-09-30 加 REFUSAL_SYSTEM_REPLY：護欄的 system 類（答案講出技術供應商或架構名詞）也是 finish() 才攔得到，
+ * 半段已經送出時接在後面——前半段講的正是不該講的技術細節，更不可以用她的聲音唸出去。
  * ⚠️ route 新增會接在半段後面的句子時，要加進這張表。
  */
 export const TAIL_REPLIES: readonly string[] = [
@@ -206,6 +234,7 @@ export const TAIL_REPLIES: readonly string[] = [
   CRISIS_SELF_HARM_REPLY,
   CRISIS_VIOLENCE_REPLY,
   VENTING_REPLY,
+  REFUSAL_SYSTEM_REPLY,
 ];
 
 /**

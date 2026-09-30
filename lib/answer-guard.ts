@@ -6,6 +6,7 @@
  * 卻仍然說出不該說的話」的殘餘風險。
  */
 import { KNOWN_TITLES } from "./known-titles";
+import { REFUSAL_SYSTEM_REPLY } from "../content/site";
 
 /**
  * 政黨與政治人物好惡（BLOCKED_PATTERNS 第十五輪那一條）用的字表。
@@ -342,10 +343,36 @@ export const PRIVACY_PATTERNS: RegExp[] = [
 ];
 
 /**
- * 封鎖清單的三類：pattern＝政治表態、新承諾、新書資訊；leak＝推理外洩（第十五輪分出來，route 送 FALLBACK_REPLY、記 failed）；
- * privacy＝在世家人隱私與老師近況
+ * 網站的技術供應商與架構名詞。命中時 kind 是 "system"，route 把整段換成 content/site.ts 的 REFUSAL_SYSTEM_REPLY
+ * （「網站背後的技術和資料處理，我沒辦法細談；「資訊聲明」和「隱私權」兩頁寫得最清楚…」），blocked 記 true、failed 不記。
+ *
+ * 🔴 2026-09-30 為什麼要有：專案擁有者截圖，訪客在 /live4 問「你這個系統是怎麼寫的」，模型照語料
+ * 07-about-this-site.md 的〈它怎麼運作〉與隱私那兩節回「系統把公開資料整理成知識庫，透過 Google Gemini 依內容回答，
+ * 並部署在 Vercel」。擁有者指示：「如果有人嘗試詢問系統的架構，或是系統隱私的問題，都要避開」。
+ * 檢索前已經有 lib/refusal-request.ts 的 system 類在攔問題；這一組是漏接時的最後一道——答案裡出現這些名字，
+ * 不管訪客怎麼問，都不讓它用她的聲音講出去。
+ *
+ * 🔴 語料逐字掃過（剝掉 ai:exclude 之後，2026-09-30）：這些名字只出現在 07-about-this-site.md 的網站說明
+ * （:46「再請 Google Gemini 依照這些段落作答」、:93 隱私那一段列的 Google Gemini、Google、ElevenLabs、LiveAvatar、
+ * WebRTC、Vercel、語言模型），自傳與其他手寫語料 0 次——她的往事不會被這一組攔下（lib/answer-guard.test.ts 有逐句掃描）。
+ * 所以單獨的「Google」可以收；「知識庫」不收（05:314「啟蒙知識庫」是自傳正文，08 也在講書），單獨的「模型」不收（04:413）。
+ * ⚠️ system prompt、系統提示在 LEAK_PATTERNS（推理外洩）裡，checkAnswer 先比那一組，所以那兩個詞照舊算 leak。
+ * ⚠️ 英文字前後都要是非英文字母，而且後面要真的出現下一個字（串流：「Clau｜del」「RAG｜E」切在中間時前半段不可以先攔），
+ * 整段剛好停在名字上的，由 finish() 補的換行接住。GPT 可以接版本號（GPT-4o）與複數（GPTs）。
+ * ⚠️ 代價：訪客自己提到 ChatGPT、模型跟著複述（「你說 ChatGPT 講我是婦運之母…」）也會被換成這一句。
  */
-export type PatternKind = "pattern" | "leak" | "privacy";
+export const SYSTEM_PATTERNS: RegExp[] = [
+  /(?<![A-Za-z])(?:Google|Gemini|Vercel|Supabase|Eleven\s?Labs|HeyGen|Live\s?Avatar|Open\s?AI|Chat\s?GPT|GPTs?|Claude|Anthropic|WebRTC|embeddings?)(?=[^A-Za-z])/i,
+  // 縮寫只認大寫：小寫的 rag、llm 不會是在講架構
+  /(?<![A-Za-z])(?:LLMs?|RAG)(?=[^A-Za-z])/,
+  /語言模型|向量資料庫|提示詞|系統指令|谷歌/,
+];
+
+/**
+ * 封鎖清單的四類：pattern＝政治表態、新承諾、新書資訊；leak＝推理外洩（第十五輪分出來，route 送 FALLBACK_REPLY、記 failed）；
+ * privacy＝在世家人隱私與老師近況；system＝技術供應商與架構名詞（2026-09-30，route 送 REFUSAL_SYSTEM_REPLY）
+ */
+export type PatternKind = "pattern" | "leak" | "privacy" | "system";
 
 /** 攔截屬於哪一類（finish() 回傳）：route.ts 靠它選替代回覆 */
 export type GuardKind = PatternKind | "grounding";
@@ -359,7 +386,8 @@ export interface GuardResult {
 }
 
 export function checkAnswer(text: string): GuardResult {
-  // 順序：推理外洩 → 政治表態等 → 隱私（同一段同時命中時的歸類，理由見 LEAK_PATTERNS 上方）
+  // 順序：推理外洩 → 政治表態等 → 隱私 → 技術架構（同一段同時命中時的歸類，理由見 LEAK_PATTERNS 上方；
+  // system 排最後：2026-09-30 才加，排在後面，既有三類的歸類一個都不變）
   for (const pattern of LEAK_PATTERNS) {
     const m = text.match(pattern);
     if (m) return { text, blocked: true, matched: m[0], kind: "leak" };
@@ -371,6 +399,10 @@ export function checkAnswer(text: string): GuardResult {
   for (const pattern of PRIVACY_PATTERNS) {
     const m = text.match(pattern);
     if (m) return { text, blocked: true, matched: m[0], kind: "privacy" };
+  }
+  for (const pattern of SYSTEM_PATTERNS) {
+    const m = text.match(pattern);
+    if (m) return { text, blocked: true, matched: m[0], kind: "system" };
   }
   return { text, blocked: false };
 }
@@ -1384,6 +1416,9 @@ export const SITE_PHRASES: string[] = [
   "我無法預測未來的局勢，也不對政治人物、政黨、選舉或時事爭議表態。",
   "謝謝你的關心與問候，很高興和你聊聊。",
   "歡迎隨時跟我聊聊，我很樂意跟你分享。",
+  // 規則 17（2026-09-30）：網站技術與資料處理只回這一句（跟 route 檢索前送的 REFUSAL_SYSTEM_REPLY 同一句）。
+  // 模型照規則講出來時，這句語料裡沒有，不收進來落地率是 0%，會被換成「這一題我答不上來」。
+  REFUSAL_SYSTEM_REPLY,
 ];
 /** content/knowledge/07-about-this-site.md 裡講網站與 AI 的那幾行，逐字（理由與排除的三行見 SITE_PHRASES 上方） */
 export const SITE_FAQ_LINES: string[] = [
@@ -1551,7 +1586,7 @@ export function createGuardedWriter(
   // 只在 blocked 由 false→true 的那一刻設一次，跟 blocked 同步，
   // 這樣就算 finish() 被呼叫第二次也還是報對第一次攔下來的原因。
   // pattern＝封鎖清單（政治表態、新承諾…）、leak＝推理外洩（第十五輪分出來）、privacy＝在世家人隱私與老師近況（第十輪分出來）、
-  // grounding＝落地檢查。
+  // system＝技術供應商與架構名詞（2026-09-30）、grounding＝落地檢查。
   let blockedKind: GuardKind | undefined;
 
   return {

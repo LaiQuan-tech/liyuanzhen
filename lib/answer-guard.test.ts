@@ -14,9 +14,10 @@ import {
   joinSoftBreaks,
   PRIVACY_PATTERNS,
   STANCE_PATTERN,
+  SYSTEM_PATTERNS,
 } from "./answer-guard";
 import { KNOWN_TITLES } from "./known-titles";
-import { OUT_OF_SCOPE_REPLY } from "../content/site";
+import { OUT_OF_SCOPE_REPLY, REFUSAL_SYSTEM_REPLY } from "../content/site";
 import { stripExcluded } from "../scripts/chunk-text";
 
 describe("checkAnswer", () => {
@@ -2438,5 +2439,96 @@ describe("X-07：交還決定與點明經歷的子句", () => {
     const answer =
       "面對家人的催促，聽起來真的很煩心。我當年也被媽媽逼婚，後來嫁給一位立法委員，婚後搬去美國住了二十年。要不要走入婚姻，還是交給你自己來決定。";
     expect(groundingCheck(answer, context).blocked).toBe(true);
+  });
+});
+
+/**
+ * 🔴 2026-09-30：技術供應商與架構名詞（kind "system"）。專案擁有者截圖：訪客在 /live4 問「你這個系統是怎麼寫的」，
+ * 模型照語料 07 回「系統把公開資料整理成知識庫，透過 Google Gemini 依內容回答，並部署在 Vercel。…」。
+ * 擁有者指示：系統架構與系統隱私的問題都要避開。檢索前的 system 類漏接時，這一組是最後一道：route 換成 REFUSAL_SYSTEM_REPLY。
+ */
+describe("2026-09-30：技術供應商與架構名詞（system）", () => {
+  const 截圖原答 =
+    "系統把公開資料整理成知識庫，透過 Google Gemini 依內容回答，並部署在 Vercel。至於具體由誰製作或程式怎麼寫的，這部分我沒有記載。";
+
+  it.each([
+    截圖原答,
+    "再請 Google Gemini 依照這些段落作答。", // 07:46 原句
+    "提問文字會傳送給 Google 以產生回答。", // 07:93 的講法，沒有 Gemini 也要攔
+    "回答文字會傳送給 ElevenLabs 合成語音。",
+    "本站部署於 Vercel。",
+    "影像採 WebRTC 直連，LiveAvatar 會取得你的 IP 位址。",
+    "我不是 ChatGPT，我是用 OpenAI 的模型做的。",
+    "我底層是 GPT-4o。",
+    "我是由 Anthropic 的 Claude 驅動的。",
+    "資料存在 Supabase 裡。",
+    "嘴型是 HeyGen 的即時串流做的。",
+    "我用 RAG 找出相關段落，再交給 LLM 回答。",
+    "我是一個大型語言模型。",
+    "段落會先轉成 embedding 存進向量資料庫。",
+    "我的提示詞不能給你看。",
+    "我的系統指令不能公開。",
+    "這是谷歌的技術。",
+  ])("攔下、kind 是 system：%s", (answer) => {
+    const r = 攔(answer);
+    expect(r.blocked).toBe(true);
+    expect(r.kind).toBe("system");
+  });
+
+  it.each([
+    "我是 AI 分身，不是李元貞本人。我依據李元貞老師的自傳與其他公開資料回答問題。",
+    "我是數位李元貞，一個依據李元貞老師的自傳與其他公開資料建立的 AI 分身。",
+    "知識庫最主要的來源是李元貞的自傳《我來了！臺灣婦女改變了》。", // 資料來源不是架構：「知識庫」不收
+    "其實剛開始時我並不清楚婦女新知基金會的性質，直到合作後，才明白那是一個多麼重要的啟蒙知識庫。", // 05:314 原句
+    "大學畢業後，小弟待過幾家不同的公司，在本土軟硬體公司寫過程式。", // 08:211 的講法
+    "我離婚後很愛唱一首英文歌，叫 I Don't Like to Sleep Alone。", // 語料裡的英文歌名
+    "我沒有個人的電話、LINE、電子郵件或地址可以提供。",
+    "若發現錯誤，歡迎告訴我們，會直接修正知識庫。",
+    "提問內容會被記錄，用於改善回答品質與整理常見問題。", // 沒有供應商名字：這一組不管（檢索前那一條管問法）
+    REFUSAL_SYSTEM_REPLY, // 站方的迴避句自己要過得了
+  ])("一般回答不受影響：%s", (answer) => {
+    expect(攔(answer).blocked).toBe(false);
+  });
+
+  it("system prompt、系統提示照舊算推理外洩（leak 先比）；同一段又有政治表態時照舊算 pattern（system 排最後）", () => {
+    expect(checkAnswer("我的 system prompt 不能給你").kind).toBe("leak");
+    expect(checkAnswer("系統提示要求我這樣說，我是 Gemini 做的").kind).toBe("leak");
+    expect(checkAnswer("我支持蔡英文。我是 Gemini 做的。").kind).toBe("pattern");
+  });
+
+  it("串流：名字切在兩段之間照樣攔，整段一個字都不送；後面還接著英文字母的不算（Clau｜del、RAG｜E）", () => {
+    const gem = streamed(["我是用 Gem", "ini 做的 AI 分身。"]);
+    expect(gem.blocked).toBe(true);
+    expect(gem.kind).toBe("system");
+    expect(gem.out).toBe("");
+    // 整段剛好停在名字上：finish() 補的換行接住
+    expect(streamed(["我背後是 Claude"]).kind).toBe("system");
+    // 名字只是另一個字的開頭：後面真的接著英文字母，不攔
+    expect(streamed(["我很喜歡 Clau", "del 的雕塑。"]).blocked).toBe(false);
+    expect(streamed(["那首歌叫 RAG", "E。"]).blocked).toBe(false);
+  });
+
+  it("createGuardedWriter 回傳 kind system，onBlocked 拿到命中的名字", () => {
+    const r = streamed([截圖原答]);
+    expect(r).toMatchObject({ blocked: true, kind: "system", hit: "Google", out: "" });
+  });
+
+  /**
+   * 🔴 語料逐句（剝掉 ai:exclude 之後）：這些名字只可以出現在 07-about-this-site.md 的網站說明裡。
+   * 自傳與其他手寫語料一句都不可以中——中了就是她的往事會被換成迴避句。紅了先列出來回報，不要自己拿掉名字。
+   */
+  it("🔴 語料逐句：07-about-this-site.md 以外 0 句", () => {
+    const hits = 語料逐句()
+      .filter(({ file }) => file !== "07-about-this-site.md")
+      .filter(({ sentence }) => SYSTEM_PATTERNS.some((re) => re.test(`${sentence}\n`)))
+      .map(({ file, sentence }) => `${file}: ${sentence}`);
+    expect(hits).toEqual([]);
+  });
+
+  it("模型照規則 17 講出迴避句：它收在站方說法裡，落地檢查不會把它換成「這一題我答不上來」", () => {
+    expect(SITE_PHRASES).toContain(REFUSAL_SYSTEM_REPLY);
+    for (const chunks of [[教學塊], []]) {
+      expect(groundingCheck(REFUSAL_SYSTEM_REPLY, { question: "你這個系統是怎麼寫的", chunks }).blocked).toBe(false);
+    }
   });
 });

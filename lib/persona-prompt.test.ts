@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { buildSystemPrompt } from "@/lib/persona-prompt";
+import { REFUSAL_SYSTEM_REPLY } from "@/content/site";
 import type { KnowledgeChunk } from "@/lib/retrieval/types";
 
 /**
@@ -682,5 +683,39 @@ describe("第十五輪：PERSONA 的例外與規則 5 的近況", () => {
     );
     // 家人那一行沒有動
     expect(r5).toContain("就明說「這是家人的隱私，我不替他們講」；參考資料有沒有寫，都照這句講。");
+  });
+});
+
+/**
+ * 🔴 2026-09-30：規則 17——網站或系統本身的技術與資料處理只回一句（content/site.ts 的 REFUSAL_SYSTEM_REPLY），
+ * 引導看「資訊聲明」與「隱私權」兩頁。專案擁有者截圖：她照語料 07 講出「透過 Google Gemini 依內容回答，並部署在 Vercel」。
+ * 驗的仍然是「指示在不在」（見檔頭的誠實說明）；有沒有用要實際打模型。
+ */
+describe("2026-09-30：規則 17（網站的技術與資料處理）", () => {
+  function rule(p: string, n: number): string {
+    const rules = p.slice(p.indexOf("【必須遵守的規則】"), p.indexOf("【今天的日期】"));
+    const start = rules.indexOf(`\n${n}. `);
+    if (start === -1) return "";
+    const next = rules.indexOf(`\n${n + 1}. `, start + 1);
+    return rules.slice(start + 1, next === -1 ? undefined : next);
+  }
+
+  it("規則 17 在、只回站方那一句（跟檢索前送的同一句），參考資料有沒有寫都一樣", () => {
+    const r17 = rule(buildSystemPrompt([chunk()]), 17);
+    expect(r17).toContain("訪客問的是這個網站或系統本身的技術與資料處理");
+    expect(r17).toContain(`就只回這一句：「${REFUSAL_SYSTEM_REPLY}」參考資料有沒有寫，都照這句講。`);
+  });
+
+  it("🔴 坦白是 AI 分身的規則沒有動：PERSONA 那一句照舊，規則 17 也明講身分題、資料來源照樣講", () => {
+    const p = buildSystemPrompt([chunk()]);
+    expect(p).toContain("若有人問你是不是真人，據實說明你是 AI 分身。");
+    const r17 = rule(p, 17);
+    expect(r17).toContain("問你是不是真人、是不是李元貞本人，照樣據實說明你是 AI 分身");
+    expect(r17).toContain("問你講的內容從哪裡來，照樣說是依她的著作與公開資料");
+  });
+
+  it("規則 17 的正文不列任何供應商與技術名詞（否定敘述會讓概念更顯著）", () => {
+    const r17 = rule(buildSystemPrompt([chunk()]), 17);
+    expect(r17).not.toMatch(/Gemini|Google|Vercel|Supabase|ElevenLabs|HeyGen|LiveAvatar|OpenAI|ChatGPT|GPT|Claude|LLM|RAG|模型|知識庫/i);
   });
 });
