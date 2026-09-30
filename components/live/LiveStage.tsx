@@ -20,6 +20,7 @@ import {
   isFullscreenSupported,
   isDocumentFullscreen,
   toggleFullscreen,
+  exitFullscreenOn,
   fullscreenButtonLabel,
 } from "@/lib/live/fullscreen";
 import TracePanel from "@/components/live/TracePanel";
@@ -66,6 +67,37 @@ const CHAT_TIMEOUT_MS = 28_000;
  * 一毛錢都不用花。設 NEXT_PUBLIC_AVATAR_PROVIDER=mock 就會切過去。
  */
 const LIVE_PROVIDER = resolveProvider() === "mock" ? "mock" : "heygen";
+
+/**
+ * 右上角「回首頁」按鈕的文字。
+ *
+ * 🔴 先放在這裡當常數，不要改 `content/site.ts`——另一個代理正在改那個檔案，
+ * 同時改會互相蓋掉彼此的版本。之後可以搬進 `content/site.ts` 的 `liveCopy`，
+ * 跟 `fallbackLink`（改用文字版）放在一起，就不會散在兩個檔案。
+ */
+const HOME_LINK_LABEL = "回首頁";
+
+/**
+ * 答案超過幾個字，手機版就要退回較小的字級。
+ *
+ * 🔴 這個插槽（見下面 `answer` 那個 `<p>`）只有 `min-h`，沒有 `max-h`／捲動／
+ * 截斷——整個底部字幕面板是 `absolute bottom-0`，往上長高，長到超過螢幕高度
+ * 就會蓋到同樣 `z-10`、比它先畫的 `<header>`。
+ *
+ * ⚠️ 實測 375×812（手機，字級放大後見下方 `<p>` 的註解）：215 字左右的答案
+ * 剛好貼著沒蓋到，235 字的答案「你問」泡泡＋答案兩段加起來的高度就會蓋到
+ * 頂部的「回首頁／全螢幕／改用文字版」列。**手機版字級每加大一點，這個門檻
+ * 就往下降**——這正是這個常數存在的理由：字放大了，長答案就要提早退讓。
+ *
+ * 🔴 只影響手機（未帶 `sm:` 的那個尺寸）。1280×800／1920×1080 用同一份 235 字
+ * 測試稿實測過，桌面版垂直空間充裕，即使維持最大字級也不會蓋到頭；桌面版
+ * 的字級因此不隨這個門檻縮小，見下面 `sm:text-[26px]` 兩邊都一樣。
+ *
+ * 這個數字不是精算出來的下限，是「量過一次剛好卡住、抓個安全邊界」的結果，
+ * 不是保證再長一截也不會蓋到——真的遇到更長的答案，這裡的門檻要跟著往下調，
+ * 或者乾脆把這個插槽改成有 `max-h` ＋捲動（目前沒有，也不是這次改動的範圍）。
+ */
+const LONG_ANSWER_CHARS = 150;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
@@ -569,6 +601,20 @@ async function microphonePending(): Promise<boolean> {
   }, []);
 
   /**
+   * 回首頁按鈕。`<Link>` 是 Next 的 client-side 換頁，不會整頁 reload——
+   * 全螢幕狀態是掛在 `document` 上的，不會因為換頁自動跟著消失，
+   * 會被使用者一路帶到首頁（首頁看起來就會是「卡住的全螢幕」）。
+   *
+   * ⚠️ 只在目前真的是全螢幕時才呼叫 `exitFullscreenOn`，不 await、不
+   * `preventDefault`：失敗（或本來就不支援全螢幕）也要照樣換頁，不能讓
+   * 離開全螢幕這件事擋住回首頁——`exitFullscreenOn` 內部已經吞掉 reject
+   * （見 `lib/live/fullscreen.ts`），這裡不需要、也不應該等它做完。
+   */
+  const handleGoHome = useCallback(() => {
+    if (isFullscreen) void exitFullscreenOn(document);
+  }, [isFullscreen]);
+
+  /**
    * 影像還在、聲音沒出來。
    *
    * ⚠️ 這不是「這一輪失敗」——答案已經在畫面上了，所以文案與版位都要跟 failed 分開，
@@ -639,8 +685,15 @@ async function microphonePending(): Promise<boolean> {
         {/* AVATAR_NAME 已經帶著「（AI 模擬）」，不需要第二個標記 */}
         <span className="font-display text-[15px] font-bold sm:text-[17px]">{AVATAR_NAME}</span>
 
-        {/* 兩顆一起靠右：全螢幕（有支援才出現）＋ 改用文字版 */}
+        {/* 三顆一起靠右：回首頁 ＋ 全螢幕（有支援才出現）＋ 改用文字版 */}
         <div className="ml-auto flex gap-2">
+          <Link
+            href="/"
+            onClick={handleGoHome}
+            className="rounded-full border border-white/35 px-3 py-1 text-[12px] font-bold transition-colors hover:bg-white/10"
+          >
+            {HOME_LINK_LABEL}
+          </Link>
           {/* ⚠️ fullscreenSupported 在 mount 前是 false（SSR 沒有 document，見上面
               useEffect 的註解），所以這顆按鈕不會在 hydration 之前就畫出來造成閃爍；
               🔴 iPhone Safari 判斷結果會是 false，這台裝置上永遠不會看到這顆按鈕
@@ -695,12 +748,39 @@ async function microphonePending(): Promise<boolean> {
           <div className="flex min-h-[3.5rem] items-center justify-center sm:min-h-[4rem]">
             {/* ⚠️ 答案優先於提示。反過來的話，「聲音沒出來」這種提示會**蓋掉**
                 它正在說「在上面」的那段答案——訪客只剩一句沒有指涉對象的錯誤訊息。 */}
+            {/*
+              🔴 2026-09-30 擁有者截圖後指示放大：「下面這行字，大一些；回答的部分也再大一些」。
+              「下面這行字」＝這個插槽本身（提示／狀態，notice 與 statusLine 共用），放大約 1.4 倍
+              （15→21、17→24）；「回答」＝下面這行 answer，短答案放大約 1.3 倍（17→22、20→26），
+              刻意比提示字再大一點，維持「答案是主角、提示是輔助」的原有層次。
+              ⚠️「你問」泡泡（上面）與 ANSWER_DISCLAIMER（下面）擁有者沒提，維持原樣不動。
+
+              🔴 答案的 leading 從 `leading-relaxed` 改成 `leading-snug`：這個插槽只有
+              `min-h`，沒有 `max-h`／捲動／截斷，字放大後答案一長，行高沒有跟著收緊的話，
+              整段字幕（連同上面的「你問」泡泡）會把 `absolute bottom-0` 的底部面板整塊
+              往上撐，而 `<header>` 也是 `absolute` 且同樣 `z-10`——面板撐到跟頭部重疊時，
+              後畫的面板會蓋在 `<header>` 上面（不是被裁掉，是疊字），實測 375×812、
+              答案 235 字左右就會蓋到「回首頁／全螢幕／改用文字版」那一列。
+
+              🔴 光收緊 leading 撐不住所有長度：手機版超過 `LONG_ANSWER_CHARS`（見該常數
+              註解）就退回 18px（仍比原本 17px 大，只是沒那麼大），desktop（`sm:`）不受
+              影響，維持 26px——1280×800／1920×1080 用同一份測試稿實測過，桌面垂直空間
+              夠，不需要退讓。這一段三個尺寸都用 235 字左右的測試稿驗證過不會蓋到頭部。
+            */}
             {answer ? (
-              <p className="text-[17px] leading-relaxed sm:text-[20px]">{answer}</p>
+              <p
+                className={
+                  answer.length > LONG_ANSWER_CHARS
+                    ? "text-[18px] leading-snug sm:text-[26px]"
+                    : "text-[22px] leading-snug sm:text-[26px]"
+                }
+              >
+                {answer}
+              </p>
             ) : notice ? (
-              <p className="text-[15px] text-brand-soft sm:text-[17px]">{notice}</p>
+              <p className="text-[21px] text-brand-soft sm:text-[24px]">{notice}</p>
             ) : (
-              <p className="text-[15px] text-white/60 sm:text-[17px]">
+              <p className="text-[21px] text-white/60 sm:text-[24px]">
                 {statusLine || liveCopy.ready}
               </p>
             )}

@@ -39,11 +39,10 @@ import { trace } from "@/lib/trace";
  * | 臉部對位 | 要量（`poses.ts` 記著量錯過一次） | 不需要，嘴型圖層本來就在立繪上 |
  * | 閒置保活 | 需要（有計費中的串流） | 不需要，沒有 session |
  *
- * 🔴 **浮水印不是裝飾。** `/live` 那條路上「AI 生成影像」是掛在
- * `AvatarStage`（poster 階段）與 `VideoAvatar`（串流階段）身上的，
- * `LiveStage` 自己不負責——所以換掉 avatar 就等於把那道法定揭露一起拆掉。
- * 這裡照樣提供，位置與樣式跟那兩份一致（`right-3 top-16`，理由見 VideoAvatar 註解）。
- * 它在這一頁**更**需要：畫面上不再是她本人的臉，而是一個 AI 生成的 Q 版形象。
+ * 🔴 **「AI 生成影像」浮水印：這一頁 2026-09-30 起沒有了，是專案擁有者的決定。**
+ * `/live` 那條路上它掛在 `AvatarStage`（poster 階段）與 `VideoAvatar`（串流階段）身上，
+ * 那三頁照舊保留（畫面是她本人的臉）。這一頁的 AI 揭露改由頂部「數位李元貞（AI 模擬）」、
+ * 每則回答下的免責句與底部 SITE_NOTICE 負責，理由與細節見下方原本放浮水印的位置的註解。
  */
 
 /**
@@ -370,24 +369,28 @@ const ChibiStage = forwardRef<AvatarStageHandle, Props>(function ChibiStage(
       </div>
 
       {/*
-        🔴 常駐揭露，不是裝飾。
+        🔴 2026-09-30 專案擁有者決定拿掉這裡的「AI 生成影像」浮水印（原本掛在
+        `right-3 top-16`，樣式跟 `AvatarStage`／`VideoAvatar` 那兩份逐字一致）。
 
-        `/live` 那條路上這條浮水印是掛在 `AvatarStage`（poster 階段）與
-        `VideoAvatar`（串流階段）身上的，`LiveStage` 自己沒有負責——所以換掉
-        avatar 元件就等於把它一起拆掉。`/about-ai` 與
-        `content/knowledge/07-about-this-site.md` 都對訪客寫著「畫面上永遠有
-        『AI 生成影像』的標記，那個標記不會關掉」，那是一句承諾。
+        理由：Q 版是插畫、從頭到尾都不是她本人的影像，不是「這顆標記換個位置」，
+        是判斷這一頁根本不需要這顆標記本身。AI 揭露沒有跟著拿掉，改由另外
+        三處共同負責，不是靠這一顆單獨扛：
 
-        🔴 這一頁比 `/live` 更需要它：那邊畫面中央至少是她**本人的臉**（真實
-        攝影或依其生成的對嘴影像），這裡整個人物都是 AI 生成的 Q 版形象。
+        1. 頂部身分列的「數位李元貞（AI 模擬）」——`content/site.ts` 的 `AVATAR_NAME`，
+           `LiveStage.tsx` 的 `<header>` 顯示。
+        2. 每則回答下方的「本回答由 AI 依公開資料生成，非李元貞老師本人發言」
+           ——`content/site.ts` 的 `ANSWER_DISCLAIMER`，同樣由 `LiveStage.tsx` 顯示。
+        3. 底部常駐的 `SITE_NOTICE`（同檔），`LiveStage.tsx` 底部字幕帶顯示。
 
-        ⚠️ `right-3 top-16` 與樣式跟那兩份逐字一致。`top-16` 不是隨手抓的：
-        `LiveStage` 最上方有一條身分列，貼 `top-3` 會被它蓋掉——實測手機版就是
-        這樣，而「浮水印看不見」等於這道護欄不存在。
+        🔴 `/live`、`/live2`、`/live3`（`AvatarStage` poster 階段與 `VideoAvatar`
+        串流階段身上的浮水印）沒有跟著拿掉，這是刻意的、兩頁不一致：那三頁
+        畫面中央是她**本人的臉**（真實攝影或依其生成的對嘴影像），揭露在那裡
+        是必要的；這一頁自始至終是 AI 生成的 Q 版插畫，不是她的影像，性質不同。
+
+        ⚠️ `app/about-ai/page.tsx` 原本那句「畫面右上角永遠有『AI 生成影像』的
+        標記，那個標記不會關掉」是對著這顆標記寫的承諾，已經跟著改成符合現況
+        ——改動這裡之前／之後都要回頭看那一頁，兩邊不能再互相矛盾。
       */}
-      <span className="pointer-events-none absolute right-3 top-16 rounded-full bg-ink/80 px-3 py-1 text-[11px] font-bold tracking-wide text-white backdrop-blur-sm">
-        AI 生成影像
-      </span>
     </div>
   );
 });
