@@ -17,7 +17,7 @@ import {
   SYSTEM_PATTERNS,
 } from "./answer-guard";
 import { KNOWN_TITLES } from "./known-titles";
-import { OUT_OF_SCOPE_REPLY, REFUSAL_SYSTEM_REPLY } from "../content/site";
+import { ANSWER_DISCLAIMER, AVATAR_NAME, OUT_OF_SCOPE_REPLY, REFUSAL_SYSTEM_REPLY } from "../content/site";
 import { stripExcluded } from "../scripts/chunk-text";
 
 describe("checkAnswer", () => {
@@ -1125,11 +1125,38 @@ describe("第四輪：錨定剝除、站方說法、異體字、分段 push", ()
     for (const 事蹟 of ["立委", "選上", "市長", "創辦", "婦女新知", "淡江", "出生", "詩集", "花蓮", "臺北", "台北", "離婚", "女兒", "華西街", "民法", "執筆"]) {
       expect(全部, `站方說法不可以有「${事蹟}」`).not.toContain(事蹟);
     }
-    const 網站說明 = readFileSync(join(__dirname, "..", "content", "knowledge", "07-about-this-site.md"), "utf-8");
+    // 🔴 2026-09-30 起比對的是剝掉 ai:exclude 之後的 07：排除區裡的行（〈它怎麼運作〉、兩節隱私說明）模型看不到，
+    // 站方說法也不可以收（理由見 SITE_PHRASES 上方的註解）。直接讀原檔的話，收了排除區的行也照樣綠。
+    const 網站說明 = stripExcluded(
+      readFileSync(join(__dirname, "..", "content", "knowledge", "07-about-this-site.md"), "utf-8"),
+      "07-about-this-site.md"
+    ).text;
     for (const line of SITE_FAQ_LINES) {
-      expect(網站說明, `07-about-this-site.md 改過了？找不到：${line}`).toContain(line);
+      expect(網站說明, `07-about-this-site.md 改過了、或這一行在排除區裡？找不到：${line}`).toContain(line);
     }
     expect(SITE_FAQ_LINES.join("")).not.toContain("1982");
+  });
+
+  /**
+   * 🔴 2026-09-30 擁有者決定拿掉 Q 版頁右上角的「AI 生成影像」標記。07 原本寫著「右上角一直標著、不會關閉」的四段
+   * 已改成現況（上方的「數位李元貞（AI 模擬）」、每則回答下的聲明、底部聲明），站方說法跟著換——舊說法留著，
+   * 模型照舊講「右上角有標記」時會被當成元語言剝掉、不檢查。
+   */
+  it("🔴 站方說法與 07 都不再承諾「AI 生成影像」標記；改由上方名稱、每則回答下的聲明、底部聲明負責", () => {
+    const 站方 = SITE_FAQ_LINES.join("\n");
+    const 網站說明 = stripExcluded(
+      readFileSync(join(__dirname, "..", "content", "knowledge", "07-about-this-site.md"), "utf-8"),
+      "07-about-this-site.md"
+    ).text;
+    for (const 舊說法 of ["AI 生成影像", "右上角", "不會關閉"]) {
+      expect(站方, `站方說法還有「${舊說法}」`).not.toContain(舊說法);
+      expect(網站說明, `07 還有「${舊說法}」`).not.toContain(舊說法);
+    }
+    expect(站方).toContain("因此畫面上方一直標著數位分身的名稱「數位李元貞（AI 模擬）」；");
+    expect(站方).toContain("每則回答下面都註明「本回答由 AI 依公開資料生成，非李元貞老師本人發言」；");
+    // 07 引的兩句要跟畫面上真正顯示的文字一致（content/site.ts）
+    expect(網站說明).toContain(`「${AVATAR_NAME}」`);
+    expect(網站說明).toContain(`「${ANSWER_DISCLAIMER.replace(/。$/, "")}」`);
   });
 
   /**
@@ -2523,6 +2550,22 @@ describe("2026-09-30：技術供應商與架構名詞（system）", () => {
       .filter(({ sentence }) => SYSTEM_PATTERNS.some((re) => re.test(`${sentence}\n`)))
       .map(({ file, sentence }) => `${file}: ${sentence}`);
     expect(hits).toEqual([]);
+  });
+
+  /**
+   * 🔴 2026-09-30 稍晚：07 的〈它怎麼運作〉與兩節隱私說明也用 ai:exclude 排除出檢索（訪客被答出「透過 Google Gemini…
+   * 部署在 Vercel」的來源）。剝掉排除區之後，連 07 也 0 句——模型手上的參考資料裡不會再有任何供應商名字。
+   * 原文還留在檔案裡（排除、不刪），所以另外確認那幾句真的還在，這一條不是因為句子被刪掉才綠。
+   */
+  it("🔴 語料逐句：剝掉 ai:exclude 之後連 07 也 0 句（技術細節排除、不是刪掉）", () => {
+    const hits = 語料逐句()
+      .filter(({ sentence }) => SYSTEM_PATTERNS.some((re) => re.test(`${sentence}\n`)))
+      .map(({ file, sentence }) => `${file}: ${sentence}`);
+    expect(hits).toEqual([]);
+    const 原檔 = readFileSync(join(__dirname, "..", "content", "knowledge", "07-about-this-site.md"), "utf-8");
+    for (const 原句 of ["再請 Google Gemini 依照這些段落作答。", "本站部署於 Vercel。", "回答文字會傳送給 ElevenLabs 合成語音。"]) {
+      expect(原檔, `07 找不到「${原句}」——被刪掉了？要用 ai:exclude 排除，不要刪`).toContain(原句);
+    }
   });
 
   it("模型照規則 17 講出迴避句：它收在站方說法裡，落地檢查不會把它換成「這一題我答不上來」", () => {

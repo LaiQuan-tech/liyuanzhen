@@ -251,6 +251,10 @@ describe("哨兵：排除區的句子不可以進切塊結果與索引", () => {
     "我發現她消瘦了很多", // 04 黃瓊華專文：2022 年的健康
     "元貞的妹妹元晶今天為什麼願意照顧元貞", // 05 劉毓秀專文：現在誰照顧她
     // ⚠️ 年表 2021、2022 兩條原本也在這張表上。2026-09-30 擁有者指示附錄照書收錄，已移到下面「附錄照書收錄」反過來守。
+    // 🔴 2026-09-30：07 網站說明的技術細節與隱私說明（擁有者指示系統架構與系統隱私一律迴避；不是書的原文，但一樣排除、不刪）
+    "再請 Google Gemini 依照這些段落作答", // 07〈它怎麼運作〉
+    "提問內容會被記錄，用於改善回答品質與整理常見問題", // 07〈提問會被記錄嗎〉
+    "本站部署於 Vercel", // 07〈提問紀錄會保留多久…〉：供應商清單
   ];
   const dir = join(process.cwd(), "content", "knowledge");
 
@@ -342,5 +346,76 @@ describe("哨兵：排除區的句子不可以進切塊結果與索引", () => {
     for (const banned of DAUGHTER_FAQ_BANNED) {
       expect(text, `索引的母女那一節有「${banned}」——用舊的 01-biography 建的索引？`).not.toContain(banned);
     }
+  });
+
+  /**
+   * 🔴 2026-09-30 擁有者決定：她自己的住處「照書講到區與原因」（persona-prompt 規則 5 同一天放寬）。
+   * 「老師現在住在哪裡？」本機檢索第一名是 01-biography 這一節，年表 2021、2022 兩條進不了前五名——
+   * 這一節只寫城市的話，規則放寬了她手上也只有城市。所以這一節照年表講到區與原因，年表以外的起居細節照舊不寫
+   * （誰照顧她、跟誰同住都在排除區裡，見上面的哨兵）。
+   */
+  const RESIDENCE_FAQ = "李元貞現在住在哪裡？";
+  const RESIDENCE_MUST = ["2021 年 10 月因身體狀況需要照顧，搬回新北深坑", "2022 年 6 月搬至臺北南港"];
+  const RESIDENCE_BANNED = ["國宅", "元晶", "妹妹", "同住", "輪椅", "跌倒", "長照"];
+  const residenceText = (entries: { title: string; content: string }[]) =>
+    entries
+      .filter((e) => e.title.includes(RESIDENCE_FAQ))
+      .map((e) => e.content)
+      .join("\n");
+
+  it("01-biography 住處那一節：照年表講到區與原因，年表以外的起居細節不寫（切塊結果與索引都查）", () => {
+    const raw = readFileSync(join(dir, "01-biography.md"), "utf-8");
+    const chunked = residenceText(chunkMarkdown(raw, { source: "x", sourceUrl: "", docTitle: "x" }, { fileName: "01-biography.md" }));
+    const index = JSON.parse(readFileSync(join(process.cwd(), "data", "knowledge-index.json"), "utf-8")) as {
+      entries: { title: string; content: string }[];
+    };
+    const indexed = residenceText(index.entries);
+    for (const [where, text] of [["切塊結果", chunked], ["索引", indexed]] as const) {
+      expect(text, `${where}裡找不到住處那一節`).not.toBe("");
+      for (const s of RESIDENCE_MUST) expect(text, `${where}的住處那一節沒有「${s}」——用舊的 01-biography 建的索引？`).toContain(s);
+      for (const banned of RESIDENCE_BANNED) expect(text, `${where}的住處那一節出現「${banned}」`).not.toContain(banned);
+    }
+  });
+
+  /**
+   * 🔴 2026-09-30：國策顧問的任期以自傳書末年表為準——2001 年獲聘、2005 年 9 月辭去（年表 2001、2005 兩條）。
+   * 01-biography 原本照維基百科寫「2001 年至 2008 年」，跟年表矛盾。模型看得到的句子裡，講到國策顧問的都不可以有 2008。
+   */
+  it("國策顧問的任期照年表：講到國策顧問的句子沒有 2006 年以後的年份（含維基百科的 2008），01-biography 寫明 2005 年 9 月辭去", () => {
+    const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+    const sentences = files.flatMap((f) =>
+      stripExcluded(readFileSync(join(dir, f), "utf-8"), f)
+        .text.split(/(?<=[。！？\n])/)
+        .filter((s) => s.includes("國策顧問"))
+        .map((s) => `${f}: ${s.trim()}`)
+    );
+    expect(sentences.length).toBeGreaterThan(0); // 真的掃到了，不是空集合白白通過
+    // 2005 年 9 月就辭去了：講到國策顧問的句子不可以出現 2006 年以後的年份（維基百科的 2008 是其中一種；
+    // 獨立審查實測只守 2008 時，改寫成「至 2006 年」這類衝突寫法照樣全綠）
+    expect(sentences.filter((s) => /20(0[6-9]|[1-9]\d)/.test(s))).toEqual([]);
+    // 講獲聘的句子，年份都要是年表的 2001
+    expect(sentences.filter((s) => s.includes("獲聘") && !s.includes("2001"))).toEqual([]);
+    const bio = readFileSync(join(dir, "01-biography.md"), "utf-8");
+    expect(bio).toContain("中華民國總統府國策顧問，2001 年 5 月獲聘，2005 年 9 月辭去。");
+    // 獨立審查：只查「含國策顧問的那一句」時，〈公職經歷〉同一行接一句「任期至 2008 年。」照樣全綠。
+    // 那一節一行一個職務，整行都查（中文數字的寫法也算）
+    const 公職 = bio.slice(bio.indexOf("## 公職經歷"), bio.indexOf("\n## ", bio.indexOf("## 公職經歷") + 1));
+    const 國策顧問那一行 = 公職.split("\n").filter((l) => l.includes("國策顧問"));
+    expect(國策顧問那一行.length).toBeGreaterThan(0);
+    for (const l of 國策顧問那一行) {
+      expect(l, `〈公職經歷〉國策顧問那一行有 2006 年以後的年份：${l}`).not.toMatch(/20(0[6-9]|[1-9]\d)|二〇〇[六七八九]|二〇[一二三四五六七八九]/);
+    }
+    // 依據：年表 2005 年那一條的原文
+    expect(readFileSync(join(dir, "10-autobiography-12.md"), "utf-8")).toContain("9 月先後辭去行政院婦女權益促進會委員與國策顧問");
+  });
+
+  /** 🔴 2026-09-30：網站由誰製作屬於規則 17（網站的技術與資料處理只回迴避句），07 不再寫「這裡沒有記載」 */
+  it("07 網站說明：所有權人那一句只講基金會不是製作單位，不寫網站由誰製作", () => {
+    const raw = readFileSync(join(dir, "07-about-this-site.md"), "utf-8");
+    const text = chunkMarkdown(raw, { source: "x", sourceUrl: "", docTitle: "x" }, { fileName: "07-about-this-site.md" })
+      .map((c) => c.content)
+      .join("\n");
+    expect(text).toContain("基金會是網站的所有權人，不是製作單位。");
+    expect(text).not.toContain("網站由誰製作");
   });
 });

@@ -52,9 +52,13 @@ export const metadata: Metadata = {
  * 頁面本身一樣是一層薄殼，同樣**刻意不掛** `<Nav />` 與 `<Footer />`——
  * 這一頁的重點就是那個佔滿螢幕的人，上下各一條列會把它切碎。代價是頁首頁尾
  * 常駐的揭露不會跟過來，所以 `LiveStage` 自己把 AVATAR_NAME、ANSWER_DISCLAIMER、
- * SITE_NOTICE 放回畫面上，而畫面上的常駐浮水印由 `ChibiStage` 提供
- * （HeyGen 那條路是 AvatarStage／VideoAvatar 提供的，換掉 avatar 元件不等於
- * 那道揭露可以跟著消失）。那不是可選的裝飾。
+ * SITE_NOTICE 放回畫面上。🔴 這一頁沒有常駐浮水印：2026-09-30 專案擁有者
+ * 決定拿掉 `/live4` 原本由 `ChibiStage` 提供的「AI 生成影像」標記，AI 揭露
+ * 改由頂部 AVATAR_NAME（「數位李元貞（AI 模擬）」）、每則回答下的
+ * ANSWER_DISCLAIMER、底部 SITE_NOTICE 這三處負責（細節見 `ChibiStage.tsx`
+ * 檔頭與原本放浮水印位置的註解）。`/live`、`/live2`、`/live3`
+ * （AvatarStage／VideoAvatar 那條路，畫面是她本人的臉）的浮水印刻意保留，
+ * 兩者不是同一個判斷。
  *
  * ⚠️ 這一頁現在跟全站共用同一份 `robots`（理由見上方 metadata 的註解），
  * 也已經加進 `app/sitemap.ts` 的 ROUTES——2026-09-30 專案擁有者確認 Q 版肖像
