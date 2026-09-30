@@ -16,6 +16,12 @@ import {
 } from "@/lib/live/recorder";
 import { METER_BARS, meterBarHeight, smoothLevel } from "@/lib/live/level";
 import { looksLikeSpeech } from "@/lib/live/transcript";
+import {
+  isFullscreenSupported,
+  isDocumentFullscreen,
+  toggleFullscreen,
+  fullscreenButtonLabel,
+} from "@/lib/live/fullscreen";
 import TracePanel from "@/components/live/TracePanel";
 import { trace, traceReset } from "@/lib/trace";
 import {
@@ -125,6 +131,20 @@ export default function LiveStage({
   const [elapsed, setElapsed] = useState(0);
   const [heard, setHeard] = useState("");
   const [answer, setAnswer] = useState("");
+  /**
+   * 這台裝置能不能全螢幕、目前是不是全螢幕。
+   *
+   * ⚠️ 初始值都是 false：server 端沒有 `document`，答不出「支不支援」這個問題，
+   * 一定要等 mount 之後的 useEffect 才能問。初始值猜別的（例如猜 true）都可能
+   * 跟 client 端第一次算出來的結果不一樣，變成 hydration mismatch。
+   *
+   * 🔴 `fullscreenSupported` 是 false 的裝置（iPhone Safari）按鈕就不會被畫出來
+   * ——不要出現一顆按了沒反應的按鈕。判斷邏輯全部在 lib/live/fullscreen.ts，
+   * 這裡只負責接 useEffect／事件監聽，理由跟 talkButtonAction 那條註解一樣：
+   * 這個檔案裡的任何東西都沒有測試，能抽成純函式的判斷都要抽走。
+   */
+  const [fullscreenSupported, setFullscreenSupported] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const stageRef = useRef<AvatarStageHandle>(null);
   const recorderRef = useRef<Recorder | null>(null);
@@ -203,6 +223,26 @@ export default function LiveStage({
     return () => {
       void recorder.dispose();
       recorderRef.current = null;
+    };
+  }, []);
+
+  /**
+   * 全螢幕支援與否、目前狀態，只能在 mount 之後問（server 沒有 document）。
+   *
+   * ⚠️ `fullscreenchange` 是標準事件，`webkitfullscreenchange` 是 Safari 舊版的
+   * 對應事件——使用者可能不是透過這顆按鈕離開全螢幕（例如直接按 Esc 或瀏覽器
+   * 自己的離開全螢幕鍵），兩個都要聽才能讓按鈕文字跟畫面實際狀態同步。
+   */
+  useEffect(() => {
+    setFullscreenSupported(isFullscreenSupported(document));
+    setIsFullscreen(isDocumentFullscreen(document));
+
+    const handleFullscreenChange = () => setIsFullscreen(isDocumentFullscreen(document));
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
     };
   }, []);
 
@@ -515,6 +555,20 @@ async function microphonePending(): Promise<boolean> {
   }, [press, release, state]);
 
   /**
+   * 全螢幕按鈕。進入用 `document.documentElement`，離開用 `document`，
+   * 哪一種情況該呼叫哪個 API、Safari 舊版的後備、reject 要吞掉——
+   * 判斷全部在 `lib/live/fullscreen.ts`（toggleFullscreen），這裡只負責接手勢。
+   *
+   * ⚠️ 一定要在使用者手勢（onClick）裡直接呼叫，不能經過額外的 await 才呼叫
+   * `requestFullscreen()`——瀏覽器只認「手勢觸發的呼叫鏈裡」這一種時機，
+   * 隔一輪事件迴圈就會被當成沒有手勢而 reject（toggleFullscreen 內部會吞掉，
+   * 但那樣按鈕就變成按了沒反應）。
+   */
+  const handleFullscreenToggle = useCallback(() => {
+    void toggleFullscreen(document.documentElement, document);
+  }, []);
+
+  /**
    * 影像還在、聲音沒出來。
    *
    * ⚠️ 這不是「這一輪失敗」——答案已經在畫面上了，所以文案與版位都要跟 failed 分開，
@@ -584,12 +638,30 @@ async function microphonePending(): Promise<boolean> {
       <header className="absolute inset-x-0 top-0 z-10 flex items-center gap-3 bg-gradient-to-b from-ink/85 to-transparent px-4 pb-10 pt-4 sm:px-6">
         {/* AVATAR_NAME 已經帶著「（AI 模擬）」，不需要第二個標記 */}
         <span className="font-display text-[15px] font-bold sm:text-[17px]">{AVATAR_NAME}</span>
-        <Link
-          href="/chat"
-          className="ml-auto rounded-full border border-white/35 px-3 py-1 text-[12px] font-bold transition-colors hover:bg-white/10"
-        >
-          {liveCopy.fallbackLink}
-        </Link>
+
+        {/* 兩顆一起靠右：全螢幕（有支援才出現）＋ 改用文字版 */}
+        <div className="ml-auto flex gap-2">
+          {/* ⚠️ fullscreenSupported 在 mount 前是 false（SSR 沒有 document，見上面
+              useEffect 的註解），所以這顆按鈕不會在 hydration 之前就畫出來造成閃爍；
+              🔴 iPhone Safari 判斷結果會是 false，這台裝置上永遠不會看到這顆按鈕
+              ——不留一顆按了沒反應的按鈕。 */}
+          {fullscreenSupported && (
+            <button
+              type="button"
+              onClick={handleFullscreenToggle}
+              aria-pressed={isFullscreen}
+              className="rounded-full border border-white/35 px-3 py-1 text-[12px] font-bold transition-colors hover:bg-white/10"
+            >
+              {fullscreenButtonLabel(isFullscreen)}
+            </button>
+          )}
+          <Link
+            href="/chat"
+            className="rounded-full border border-white/35 px-3 py-1 text-[12px] font-bold transition-colors hover:bg-white/10"
+          >
+            {liveCopy.fallbackLink}
+          </Link>
+        </div>
       </header>
 
       {/* 底部：字幕、免責、按鈕、揭露 */}
